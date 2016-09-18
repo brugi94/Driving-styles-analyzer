@@ -12,11 +12,15 @@ public class Data {
         accelerations = new double[3];
     }
     public Data(SensorEvent datas){
-        if(datas.sensor.getType()!= Sensor.TYPE_ACCELEROMETER){
-            throw new IllegalArgumentException();
-        }
+        this();
         for(int i=0;i<3;i++){
             accelerations[i] = datas.values[i];
+        }
+    }
+    public Data(Data input){
+        this();
+        for(int axys=0;axys<3;axys++){
+            this.accelerations[axys] = input.accelerations[axys];
         }
     }
 }

@@ -4,12 +4,12 @@ package com.example.ricca.tesi;
  * Created by ricca on 16/09/2016.
  */
 public class DataQueue {
-    public final int BUTTERWORTH = 0, LOWPASS = 1, FILTERED = 0, NONFILTERED = 1;
+    public final static int BUTTERWORTH = 0, LOWPASS = 1, FILTERED = 0, NONFILTERED = 1;
     private Data[] filteredDatas, nonFilteredDatas;
     private int length;
     private double[] gravity;
     private double[] butterworthCoefficients;
-    private float lowPassCoefficient;
+    private double lowPassCoefficient;
     private float highPassCoefficient;
     private int type;
 
@@ -23,7 +23,7 @@ public class DataQueue {
     /*
     type is the type of filter desired, parameter is the frequency ratio for the buttorth filter or the coefficient for the low-pass filter
      */
-    public DataQueue(int type, int parameter) {
+    public DataQueue(int type, double parameter) {
         this();
         if (type != BUTTERWORTH && type != LOWPASS) {
             throw new IllegalArgumentException();
@@ -39,9 +39,11 @@ public class DataQueue {
                 butterworthCoefficients[1] = 2 * butterworthCoefficients[0];
                 butterworthCoefficients[2] = 2.0 * (omega * omega - 1.0) * butterworthCoefficients[0];
                 butterworthCoefficients[3] = -(1.0 - sqr2 * omega + omega * omega) * butterworthCoefficients[0];
+                break;
             }
             case LOWPASS: {
                 lowPassCoefficient = parameter;
+                break;
             }
         }
     }
@@ -53,7 +55,12 @@ public class DataQueue {
         if (nonFilteredDatas.length == length) {
             resize(NONFILTERED);
         }
-        nonFilteredDatas[length] = sample;
+
+        //save the non-filtered data
+        nonFilteredDatas[length] = new Data(sample);
+
+
+        //filter the data
         for (int axys = 0; axys < 3; axys++) {
 
             //LOW-PASS or BUTTERWORTH
@@ -62,25 +69,26 @@ public class DataQueue {
                     if (length != 0) {
                         sample.accelerations[axys] = (filteredDatas[length].accelerations[axys] * lowPassCoefficient) + (1 - lowPassCoefficient) * sample.accelerations[axys];
                     }
+                    break;
                 }
                 case BUTTERWORTH: {
-                    if (length < 2) {
+                    if (length >= 2) {
                         sample.accelerations[axys] *= butterworthCoefficients[0];
                         sample.accelerations[axys] += butterworthCoefficients[1] * nonFilteredDatas[length - 1].accelerations[axys];
                         sample.accelerations[axys] += butterworthCoefficients[0] * nonFilteredDatas[length - 2].accelerations[axys];
                         sample.accelerations[axys] += butterworthCoefficients[2] * filteredDatas[length - 1].accelerations[axys];
                         sample.accelerations[axys] += butterworthCoefficients[3] * filteredDatas[length - 2].accelerations[axys];
                     }
+                    break;
                 }
             }
 
             //HIGH-PASS filter
             gravity[axys] = (highPassCoefficient * sample.accelerations[axys]) + (1 - highPassCoefficient) * gravity[axys];
             sample.accelerations[axys] -= gravity[axys];
-
         }
+        filteredDatas[length] = new Data(sample);
         //add to filtered array
-        filteredDatas[length] = sample;
         length++;
     }
 
@@ -90,11 +98,13 @@ public class DataQueue {
                 Data[] newDatas = new Data[filteredDatas.length * 2];
                 System.arraycopy(filteredDatas, 0, newDatas, 0, length);
                 filteredDatas = newDatas;
+                break;
             }
             case NONFILTERED: {
                 Data[] newDatas = new Data[nonFilteredDatas.length * 2];
                 System.arraycopy(nonFilteredDatas, 0, newDatas, 0, length);
                 nonFilteredDatas = newDatas;
+                break;
             }
         }
     }
@@ -105,13 +115,15 @@ public class DataQueue {
         switch(filtered){
             case FILTERED:{
                 datas = filteredDatas;
+                break;
             }
             default:{
                 datas = nonFilteredDatas;
+                break;
             }
         }
-        double[] accelerations = new double[datas.length];
-        for(int i=0;i<datas.length;i++){
+        double[] accelerations = new double[length];
+        for(int i=0;i<length;i++){
             accelerations[i] = datas[i].accelerations[axys];
         }
         return accelerations;
