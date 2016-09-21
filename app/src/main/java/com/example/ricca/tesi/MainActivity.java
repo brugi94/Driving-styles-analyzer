@@ -15,6 +15,7 @@ import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
 import android.widget.Button;
+import android.widget.Toast;
 
 import org.apache.poi.hssf.usermodel.HSSFSheet;
 import org.apache.poi.hssf.usermodel.HSSFWorkbook;
@@ -90,7 +91,6 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
     @Override
     protected void onResume() {
         super.onResume();
-        Log.i("tag", ""+ (-1)%2);
         initialize();
 
     }
@@ -273,6 +273,14 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
             i++;
         }
         return returnFile;
+    }
+
+    public void resetGravity(View view) {
+        if(gathering){
+            Toast.makeText(getApplicationContext(), "stop gathering first", Toast.LENGTH_SHORT);
+            return;
+        }
+        currentGravity = new double[3];
     }
 }
 

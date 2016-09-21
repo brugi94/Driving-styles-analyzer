@@ -22,7 +22,6 @@ public class DataQueue {
         length = 0;
         gravity = new double[3];
         highPassCoefficient = 0.1F;
-        highFilteredDatas = new Data[3];
     }
 
     /*
@@ -36,6 +35,7 @@ public class DataQueue {
         this.type = type;
         switch (type) {
             case BUTTERWORTH: {
+                highFilteredDatas = new Data[3];
                 butterworthCoefficients = new double[4];
                 //1st and 3rd coefficients are equal, so the array is long 4
                 double omega = 1.0 / (Math.tan(Math.PI * parameter));
@@ -78,7 +78,8 @@ public class DataQueue {
             //HIGH-PASS filter
             gravity[axys] = (highPassCoefficient * sample.accelerations[axys]) + (1 - highPassCoefficient) * gravity[axys];
             sample.accelerations[axys] -= gravity[axys];
-            if(axys==2){
+            //we use highFilteredDatas to keep the last 2 values of datas that have been high filtered (will need them when butterworth filtering)
+            if ((axys == 2) && (type==BUTTERWORTH)) {
                 highFilteredDatas[currentLastData] = new Data(sample);
             }
             //LOW-PASS or BUTTERWORTH
@@ -91,14 +92,35 @@ public class DataQueue {
                 }
                 case BUTTERWORTH: {
                     if (length >= 2) {
+                        //calculate which highfiltereddatas i need to use (using a circular array to save them)
+                        int first, second;
+                        switch (currentLastData) {
+                            case 0: {
+                                first = 2;
+                                second = 1;
+                                break;
+                            }
+                            case 1: {
+                                first = 0;
+                                second = 2;
+                                break;
+                            }
+                            default: {
+                                first = currentLastData - 1;
+                                second = currentLastData - 2;
+                            }
+                        }
                         sample.accelerations[axys] *= butterworthCoefficients[0];
-                        sample.accelerations[axys] += butterworthCoefficients[1] * nonFilteredDatas[length - 1].accelerations[axys];
-                        sample.accelerations[axys] += butterworthCoefficients[0] * nonFilteredDatas[length - 2].accelerations[axys];
+                        sample.accelerations[axys] += butterworthCoefficients[1] * highFilteredDatas[first].accelerations[axys];
+                        sample.accelerations[axys] += butterworthCoefficients[0] * highFilteredDatas[second].accelerations[axys];
                         sample.accelerations[axys] += butterworthCoefficients[2] * filteredDatas[length - 1].accelerations[axys];
                         sample.accelerations[axys] += butterworthCoefficients[3] * filteredDatas[length - 2].accelerations[axys];
                     }
                     break;
                 }
+            }
+            if (axys == 2) {
+                currentLastData = (currentLastData + 1) % 3;
             }
         }
         //add to filtered array
