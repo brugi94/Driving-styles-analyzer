@@ -5,6 +5,7 @@ import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
+import android.media.MediaScannerConnection;
 import android.os.CountDownTimer;
 import android.os.Environment;
 import android.os.Handler;
@@ -38,7 +39,8 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
     public final int SAMPLE_RATE = (int) 10E3;
     private HandlerThread backgroundAccelerometerThread, backgroundExcelThread;
     private boolean gathering;
-    public final long SESSION_LENGTH = (long) 30000;
+    public final long SESSION_LENGTH = (long) 5000;
+    private double[] currentGravity;
     CountDownTimer timer = new CountDownTimer(SESSION_LENGTH, SESSION_LENGTH) {
         @Override
         public void onTick(long millisUntilFinished) {
@@ -49,6 +51,7 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         public void onFinish() {
             stopGathering();
             saveExcel();
+            System.gc();
             startGathering();
         }
     };
@@ -65,6 +68,9 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
     @Override
     protected void onPause() {
         super.onPause();
+        if(gathering){
+            stopGathering();
+        }
         closeBackgroundThread();
     }
 
@@ -84,6 +90,7 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
     @Override
     protected void onResume() {
         super.onResume();
+        Log.i("tag", ""+ (-1)%2);
         initialize();
 
     }
@@ -91,7 +98,6 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
     @Override
     public void onSensorChanged(SensorEvent event) {
         queue[currentQueue].add(new Data(event));
-        Log.i("tag", "data acquired");
     }
 
     @Override
@@ -101,9 +107,7 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
 
     private void initialize() {
         queue = new DataQueue[2];
-        for (int i = 0; i < queue.length; i++) {
-            queue[i] = new DataQueue(DataQueue.BUTTERWORTH, 0.10);
-        }
+        currentGravity = new double[3];
         retrieveSensor();
         openBackgroundThread();
     }
@@ -126,6 +130,7 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         if (gathering) {
             stopGathering();
             saveExcel();
+            System.gc();
         } else {
             startGathering();
         }
@@ -133,6 +138,7 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
 
     // TODO: 16/09/2016 save the excel
     private void saveExcel() {
+        Log.i("tag","started saving");
         //create the sheet
 
         HSSFWorkbook wb = new HSSFWorkbook();
@@ -148,11 +154,10 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
 
 
         //print the filtered and non-filtered datas
-
+        int saveQueue = (currentQueue == 0) ? 1 : 0;
         for (int filtered = DataQueue.FILTERED; filtered <= DataQueue.NONFILTERED; filtered++) {
             for (int axys = 0; axys < 3; axys++) {
-                int saveQueue = (currentQueue==0)? 1:0;
-                writeColumn(queue[(saveQueue)].getAccelerations(filtered, axys), (3 * filtered) + axys, currentSheet);
+                writeColumn(queue[(saveQueue)].getAccelerations(filtered, axys), (3 * filtered) + axys, currentSheet, false);
             }
         }
 
@@ -168,6 +173,11 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         } catch (IOException e) {
             e.printStackTrace();
         }
+        currentGravity = queue[saveQueue].getGravity();
+        Log.i("tag", currentGravity[0]+"-"+ currentGravity[1] +"-"+currentGravity[2]);
+        MediaScannerConnection.scanFile(this, new String[]{file.getPath()}, null, null);
+        queue[saveQueue] = null;
+        Log.i("tag","done saving");
     }
 
     private void stopGathering() {
@@ -179,13 +189,14 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
     }
 
     private void startGathering() {
+        queue[currentQueue] = new DataQueue(DataQueue.BUTTERWORTH, 0.1, currentGravity);
         ((Button) findViewById(R.id.gatherButton)).setText("stop data gathering");
-        manager.registerListener(this, accelerometer, 5*SAMPLE_RATE, backgroundAccelerometerHandler);
+        manager.registerListener(this, accelerometer, 5 * SAMPLE_RATE, backgroundAccelerometerHandler);
         gathering = true;
         timer.start();
     }
 
-    private void writeColumn(double[] array, int columnNumber, HSSFSheet sheet) {
+    private void writeColumn(double[] array, int columnNumber, HSSFSheet sheet, boolean isFFT) {
         try {
             //print the axys on top of the column
             Method method = getMethod(columnNumber);
@@ -205,11 +216,15 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
                     break;
                 }
             }
-            //print the values
-            for (int i = 2; i < array.length + 2; i++) {
-                currentRow = (Row) method.invoke(sheet, i);
-                currentCell = currentRow.createCell(columnNumber);
-                currentCell.setCellValue(array[i - 2]);
+            if (!isFFT) {
+                //print the values
+                for (int i = 0; i < array.length; i++) {
+                    currentRow = (Row) method.invoke(sheet, i + 2);
+                    currentCell = currentRow.createCell(columnNumber);
+                    currentCell.setCellValue(array[i]);
+                }
+            } else {
+
             }
         } catch (IllegalAccessException e) {
             e.printStackTrace();

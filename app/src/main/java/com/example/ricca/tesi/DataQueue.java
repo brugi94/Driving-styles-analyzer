@@ -1,5 +1,7 @@
 package com.example.ricca.tesi;
 
+import android.util.Log;
+
 /**
  * Created by ricca on 16/09/2016.
  */
@@ -11,13 +13,16 @@ public class DataQueue {
     private double[] butterworthCoefficients;
     private double lowPassCoefficient;
     private float highPassCoefficient;
-    private int type;
+    private Data[] highFilteredDatas;
+    private int type, currentLastData;
 
     public DataQueue() {
-        filteredDatas = nonFilteredDatas = new Data[10];
+        filteredDatas = new Data[10];
+        nonFilteredDatas = new Data[10];
         length = 0;
         gravity = new double[3];
-        highPassCoefficient = 0.025F;
+        highPassCoefficient = 0.1F;
+        highFilteredDatas = new Data[3];
     }
 
     /*
@@ -48,7 +53,14 @@ public class DataQueue {
         }
     }
 
-    public void add(Data sample) {
+    public DataQueue(int type, double parameter, double[] currentGravity) {
+        this(type, parameter);
+        for (int axys = 0; axys < 3; axys++) {
+            gravity[axys] = currentGravity[axys];
+        }
+    }
+
+    public synchronized void add(Data sample) {
         if (filteredDatas.length == length) {
             resize(FILTERED);
         }
@@ -63,11 +75,17 @@ public class DataQueue {
         //filter the data
         for (int axys = 0; axys < 3; axys++) {
 
+            //HIGH-PASS filter
+            gravity[axys] = (highPassCoefficient * sample.accelerations[axys]) + (1 - highPassCoefficient) * gravity[axys];
+            sample.accelerations[axys] -= gravity[axys];
+            if(axys==2){
+                highFilteredDatas[currentLastData] = new Data(sample);
+            }
             //LOW-PASS or BUTTERWORTH
             switch (type) {
                 case LOWPASS: {
                     if (length != 0) {
-                        sample.accelerations[axys] = (filteredDatas[length].accelerations[axys] * lowPassCoefficient) + (1 - lowPassCoefficient) * sample.accelerations[axys];
+                        sample.accelerations[axys] = (filteredDatas[length - 1].accelerations[axys] * lowPassCoefficient) + (1 - lowPassCoefficient) * sample.accelerations[axys];
                     }
                     break;
                 }
@@ -82,14 +100,9 @@ public class DataQueue {
                     break;
                 }
             }
-
-            //HIGH-PASS filter
-            gravity[axys] = (highPassCoefficient * sample.accelerations[axys]) + (1 - highPassCoefficient) * gravity[axys];
-            sample.accelerations[axys] -= gravity[axys];
         }
-        filteredDatas[length] = new Data(sample);
         //add to filtered array
-        length++;
+        filteredDatas[length++] = new Data(sample);
     }
 
     private void resize(int array) {
@@ -110,22 +123,26 @@ public class DataQueue {
     }
 
     // TODO: 16/09/2016 method that receives the axys and returns an array with all the datas of that axys
-    public double[] getAccelerations(int filtered, int axys){
+    public double[] getAccelerations(int filtered, int axys) {
         Data[] datas = null;
-        switch(filtered){
-            case FILTERED:{
+        switch (filtered) {
+            case FILTERED: {
                 datas = filteredDatas;
                 break;
             }
-            default:{
+            case NONFILTERED: {
                 datas = nonFilteredDatas;
                 break;
             }
         }
         double[] accelerations = new double[length];
-        for(int i=0;i<length;i++){
+        for (int i = 0; i < length; i++) {
             accelerations[i] = datas[i].accelerations[axys];
         }
         return accelerations;
+    }
+
+    public double[] getGravity() {
+        return gravity;
     }
 }

@@ -1,6 +1,5 @@
 package com.example.ricca.tesi;
 
-import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 
 /**
