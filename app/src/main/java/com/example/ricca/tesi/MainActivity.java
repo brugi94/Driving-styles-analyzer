@@ -19,9 +19,11 @@ import android.widget.Toast;
 
 import org.apache.poi.hssf.usermodel.HSSFSheet;
 import org.apache.poi.hssf.usermodel.HSSFWorkbook;
+import org.apache.poi.ss.formula.functions.T;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
+import org.jtransforms.fft.DoubleFFT_1D;
 
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -40,8 +42,9 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
     public final int SAMPLE_RATE = (int) 10E3;
     private HandlerThread backgroundAccelerometerThread, backgroundExcelThread;
     private boolean gathering;
-    public final long SESSION_LENGTH = (long) 5000;
+    public final long SESSION_LENGTH = (long) 60000;
     private double[] currentGravity;
+    private final int fftLength = 10;
     CountDownTimer timer = new CountDownTimer(SESSION_LENGTH, SESSION_LENGTH) {
         @Override
         public void onTick(long millisUntilFinished) {
@@ -69,7 +72,7 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
     @Override
     protected void onPause() {
         super.onPause();
-        if(gathering){
+        if (gathering) {
             stopGathering();
         }
         closeBackgroundThread();
@@ -138,7 +141,7 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
 
     // TODO: 16/09/2016 save the excel
     private void saveExcel() {
-        Log.i("tag","started saving");
+        Log.i("tag", "started saving");
         //create the sheet
 
         HSSFWorkbook wb = new HSSFWorkbook();
@@ -156,8 +159,13 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         //print the filtered and non-filtered datas
         int saveQueue = (currentQueue == 0) ? 1 : 0;
         for (int filtered = DataQueue.FILTERED; filtered <= DataQueue.NONFILTERED; filtered++) {
-            for (int axys = 0; axys < 3; axys++) {
-                writeColumn(queue[(saveQueue)].getAccelerations(filtered, axys), (3 * filtered) + axys, currentSheet, false);
+            for (int axes = 0; axes < 3; axes++) {
+                double[] datas = queue[(saveQueue)].getAccelerationArray(filtered, axes);
+                writeColumn(datas, (3 * filtered) + axes, currentSheet, false);
+                if (axes == 2 && filtered == DataQueue.FILTERED) {
+                    datas = calculateFFT(datas, queue[saveQueue].getLength());
+                    writeColumn(datas, 6, currentSheet, true);
+                }
             }
         }
 
@@ -174,10 +182,10 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
             e.printStackTrace();
         }
         currentGravity = queue[saveQueue].getGravity();
-        Log.i("tag", currentGravity[0]+"-"+ currentGravity[1] +"-"+currentGravity[2]);
+        Log.i("tag", currentGravity[0] + "-" + currentGravity[1] + "-" + currentGravity[2]);
         MediaScannerConnection.scanFile(this, new String[]{file.getPath()}, null, null);
         queue[saveQueue] = null;
-        Log.i("tag","done saving");
+        Log.i("tag", "done saving");
     }
 
     private void stopGathering() {
@@ -196,41 +204,116 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         timer.start();
     }
 
+    private double[] calculateFFT(double[] array, int length) {
+        if (length < fftLength) {
+            return null;
+        }
+        DoubleFFT_1D fft = new DoubleFFT_1D(fftLength);
+        double[] clusterSum;
+        //we start from the 10th sample because we filter the gravity out in the first samples
+        if (array.length % fftLength == 0) {
+            clusterSum = new double[(length / fftLength) - 1];
+        } else {
+            clusterSum = new double[(length / fftLength)];
+        }
+        //sum the values in the clusters
+        for (int i = fftLength; i < length; i++) {
+            clusterSum[(i / fftLength)-1] += array[i];
+        }
+        //get the max of the clusters
+        double max = Math.abs(clusterSum[0]);
+        int maxIndex = 0;
+        for (int i = 1; i < clusterSum.length; i++) {
+            if (Math.abs(clusterSum[i]) >= max) {
+                max = Math.abs(clusterSum[i]);
+                maxIndex = i;
+            }
+        }
+        //fft it
+        double[] fftArray = new double[2*fftLength];
+        System.arraycopy(array, maxIndex * fftLength, fftArray, 0, fftLength);
+        fft.realForwardFull(fftArray);
+        return fftArray;
+    }
+
     private void writeColumn(double[] array, int columnNumber, HSSFSheet sheet, boolean isFFT) {
         try {
-            //print the axys on top of the column
-            Method method = getMethod(columnNumber);
+            //print the axis on top of the column
+            String value = "";
+            switch (columnNumber % 3) {
+                case 0: {
+                    value = "X-axis";
+                    break;
+                }
+                case 1: {
+                    value = "Y-axis";
+                    break;
+                }
+                case 2: {
+                    value = "Z-axis";
+                    break;
+                }
+            }
+            Method method = createCell(sheet, 1, columnNumber, value);
+            /*Method method = getMethod(columnNumber);
             Row currentRow = (Row) method.invoke(sheet, 1);
             Cell currentCell = currentRow.createCell(columnNumber);
             switch (columnNumber % 3) {
                 case 0: {
-                    currentCell.setCellValue("X-axys");
+                    currentCell.setCellValue("X-axis");
                     break;
                 }
                 case 1: {
-                    currentCell.setCellValue("Y-axys");
+                    currentCell.setCellValue("Y-axis");
                     break;
                 }
                 case 2: {
-                    currentCell.setCellValue("Z-axys");
+                    currentCell.setCellValue("Z-axis");
                     break;
                 }
-            }
+            }*/
             if (!isFFT) {
                 //print the values
                 for (int i = 0; i < array.length; i++) {
+                    createCell(sheet, i + 2, columnNumber, array[i], method);
+                    /*
                     currentRow = (Row) method.invoke(sheet, i + 2);
                     currentCell = currentRow.createCell(columnNumber);
-                    currentCell.setCellValue(array[i]);
+                    currentCell.setCellValue(array[i]);*/
                 }
             } else {
-
+                for (int i = 0; i < array.length; i = i + 2) {
+                    createCell(sheet, (i/2) + 2, columnNumber, array[i], method);/*
+                    currentRow = (Row) method.invoke(sheet, i + 2);
+                    currentCell = currentRow.createCell(columnNumber);
+                    currentCell.setCellValue(array[i]);*/
+                }
             }
         } catch (IllegalAccessException e) {
             e.printStackTrace();
         } catch (InvocationTargetException e) {
             e.printStackTrace();
         }
+    }
+
+    /*
+    inserts a value in the selected cell
+     */
+    private <T> void createCell(Sheet sheet, int rowNumber, int columnNumber, T value, Method method) throws InvocationTargetException, IllegalAccessException {
+        Row currentRow = (Row) method.invoke(sheet, rowNumber);
+        Cell currentCell = currentRow.createCell(columnNumber);
+        if (value instanceof String) {
+            currentCell.setCellValue((String) value);
+        } else{
+            currentCell.setCellValue((Double) value);
+        }
+    }
+
+
+    private <T> Method createCell(Sheet sheet, int rowNumber, int columnNumber, T value) throws InvocationTargetException, IllegalAccessException {
+        Method method = getMethod(columnNumber);
+        createCell(sheet, rowNumber, columnNumber, value, method);
+        return method;
     }
 
     /*
@@ -259,7 +342,7 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
     private File getFile() {
         File folder = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
         Calendar calendar = Calendar.getInstance();
-        int month = calendar.get(Calendar.MONTH);
+        int month = calendar.get(Calendar.MONTH) + 1;
         int year = calendar.get(Calendar.YEAR);
         int day = calendar.get(Calendar.DAY_OF_MONTH);
         int i = 0;
@@ -276,8 +359,8 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
     }
 
     public void resetGravity(View view) {
-        if(gathering){
-            Toast.makeText(getApplicationContext(), "stop gathering first", Toast.LENGTH_SHORT);
+        if (gathering) {
+            Toast.makeText(getApplicationContext(), "stop gathering first", Toast.LENGTH_SHORT).show();
             return;
         }
         currentGravity = new double[3];

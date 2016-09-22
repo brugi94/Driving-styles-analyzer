@@ -15,6 +15,8 @@ public class DataQueue {
     private float highPassCoefficient;
     private Data[] highFilteredDatas;
     private int type, currentLastData;
+    private int lastOverThresholdValue, overThresholdAxis;
+    private final static double THRESHOLD = 3.0f;
 
     public DataQueue() {
         filteredDatas = new Data[10];
@@ -22,6 +24,9 @@ public class DataQueue {
         length = 0;
         gravity = new double[3];
         highPassCoefficient = 0.1F;
+    }
+    public int getLength(){
+        return length;
     }
 
     /*
@@ -55,8 +60,8 @@ public class DataQueue {
 
     public DataQueue(int type, double parameter, double[] currentGravity) {
         this(type, parameter);
-        for (int axys = 0; axys < 3; axys++) {
-            gravity[axys] = currentGravity[axys];
+        for (int axes = 0; axes < 3; axes++) {
+            gravity[axes] = currentGravity[axes];
         }
     }
 
@@ -73,20 +78,20 @@ public class DataQueue {
 
 
         //filter the data
-        for (int axys = 0; axys < 3; axys++) {
+        for (int axes = 0; axes < 3; axes++) {
 
             //HIGH-PASS filter
-            gravity[axys] = (highPassCoefficient * sample.accelerations[axys]) + (1 - highPassCoefficient) * gravity[axys];
-            sample.accelerations[axys] -= gravity[axys];
+            gravity[axes] = (highPassCoefficient * sample.accelerations[axes]) + (1 - highPassCoefficient) * gravity[axes];
+            sample.accelerations[axes] -= gravity[axes];
             //we use highFilteredDatas to keep the last 2 values of datas that have been high filtered (will need them when butterworth filtering)
-            if ((axys == 2) && (type==BUTTERWORTH)) {
+            if ((axes == 2) && (type == BUTTERWORTH)) {
                 highFilteredDatas[currentLastData] = new Data(sample);
             }
             //LOW-PASS or BUTTERWORTH
             switch (type) {
                 case LOWPASS: {
                     if (length != 0) {
-                        sample.accelerations[axys] = (filteredDatas[length - 1].accelerations[axys] * lowPassCoefficient) + (1 - lowPassCoefficient) * sample.accelerations[axys];
+                        sample.accelerations[axes] = (filteredDatas[length - 1].accelerations[axes] * lowPassCoefficient) + (1 - lowPassCoefficient) * sample.accelerations[axes];
                     }
                     break;
                 }
@@ -110,17 +115,24 @@ public class DataQueue {
                                 second = currentLastData - 2;
                             }
                         }
-                        sample.accelerations[axys] *= butterworthCoefficients[0];
-                        sample.accelerations[axys] += butterworthCoefficients[1] * highFilteredDatas[first].accelerations[axys];
-                        sample.accelerations[axys] += butterworthCoefficients[0] * highFilteredDatas[second].accelerations[axys];
-                        sample.accelerations[axys] += butterworthCoefficients[2] * filteredDatas[length - 1].accelerations[axys];
-                        sample.accelerations[axys] += butterworthCoefficients[3] * filteredDatas[length - 2].accelerations[axys];
+                        sample.accelerations[axes] *= butterworthCoefficients[0];
+                        sample.accelerations[axes] += butterworthCoefficients[1] * highFilteredDatas[first].accelerations[axes];
+                        sample.accelerations[axes] += butterworthCoefficients[0] * highFilteredDatas[second].accelerations[axes];
+                        sample.accelerations[axes] += butterworthCoefficients[2] * filteredDatas[length - 1].accelerations[axes];
+                        sample.accelerations[axes] += butterworthCoefficients[3] * filteredDatas[length - 2].accelerations[axes];
                     }
                     break;
                 }
             }
-            if (axys == 2) {
+            if (axes == 2) {
                 currentLastData = (currentLastData + 1) % 3;
+            }
+        }
+        for(int axes=0;axes<3;axes++){
+            if(sample.accelerations[axes]>THRESHOLD && length>5){
+                lastOverThresholdValue = length;
+                overThresholdAxis = axes;
+                break;
             }
         }
         //add to filtered array
@@ -130,13 +142,13 @@ public class DataQueue {
     private void resize(int array) {
         switch (array) {
             case FILTERED: {
-                Data[] newDatas = new Data[filteredDatas.length * 2];
+                Data[] newDatas = new Data[(int)(filteredDatas.length * 1.1)];
                 System.arraycopy(filteredDatas, 0, newDatas, 0, length);
                 filteredDatas = newDatas;
                 break;
             }
             case NONFILTERED: {
-                Data[] newDatas = new Data[nonFilteredDatas.length * 2];
+                Data[] newDatas = new Data[(int)(nonFilteredDatas.length * 1.1)];
                 System.arraycopy(nonFilteredDatas, 0, newDatas, 0, length);
                 nonFilteredDatas = newDatas;
                 break;
@@ -145,7 +157,7 @@ public class DataQueue {
     }
 
     // TODO: 16/09/2016 method that receives the axys and returns an array with all the datas of that axys
-    public double[] getAccelerations(int filtered, int axys) {
+    public double[] getAccelerationArray(int filtered, int axis, int from, int length) {
         Data[] datas = null;
         switch (filtered) {
             case FILTERED: {
@@ -157,11 +169,22 @@ public class DataQueue {
                 break;
             }
         }
+        if (from + length > datas.length) {
+            return null;
+        }
         double[] accelerations = new double[length];
-        for (int i = 0; i < length; i++) {
-            accelerations[i] = datas[i].accelerations[axys];
+        for (int i = from; i < from + length; i++) {
+            accelerations[i - from] = datas[i].accelerations[axis];
         }
         return accelerations;
+    }
+
+    public double[] getAccelerationArray(int filtered, int axis) {
+        if (filtered == DataQueue.FILTERED) {
+            return getAccelerationArray(filtered, axis, 0, length);
+        } else {
+            return getAccelerationArray(filtered, axis, 0, length);
+        }
     }
 
     public double[] getGravity() {
