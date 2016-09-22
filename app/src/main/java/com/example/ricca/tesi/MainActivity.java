@@ -44,7 +44,7 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
     private boolean gathering;
     public final long SESSION_LENGTH = (long) 60000;
     private double[] currentGravity;
-    private final int fftLength = 10;
+    private final int FFT_LENGTH = 10, FFT_PADDING = 15;
     CountDownTimer timer = new CountDownTimer(SESSION_LENGTH, SESSION_LENGTH) {
         @Override
         public void onTick(long millisUntilFinished) {
@@ -205,74 +205,50 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
     }
 
     private double[] calculateFFT(double[] array, int length) {
-        if (length < fftLength) {
+        // TODO: 22/09/2016 calculate PADDING
+        if (length < FFT_LENGTH) {
             return null;
         }
-        DoubleFFT_1D fft = new DoubleFFT_1D(fftLength);
-        double[] clusterSum;
-        //we start from the 10th sample because we filter the gravity out in the first samples
-        if (array.length % fftLength == 0) {
-            clusterSum = new double[(length / fftLength) - 1];
-        } else {
-            clusterSum = new double[(length / fftLength)];
-        }
-        //sum the values in the clusters
-        for (int i = fftLength; i < length; i++) {
-            clusterSum[(i / fftLength)-1] += array[i];
-        }
+        DoubleFFT_1D fft = new DoubleFFT_1D(FFT_LENGTH);
         //get the max of the clusters
-        double max = Math.abs(clusterSum[0]);
-        int maxIndex = 0;
-        for (int i = 1; i < clusterSum.length; i++) {
-            if (Math.abs(clusterSum[i]) >= max) {
-                max = Math.abs(clusterSum[i]);
+        double max = Math.abs(array[FFT_PADDING]);
+        int maxIndex = FFT_PADDING;
+        for (int i = FFT_PADDING+1; i < length; i++) {
+            if (Math.abs(array[i]) >= max) {
+                max = Math.abs(array[i]);
                 maxIndex = i;
             }
         }
         //fft it
-        double[] fftArray = new double[2*fftLength];
-        System.arraycopy(array, maxIndex * fftLength, fftArray, 0, fftLength);
+        double[] fftArray = new double[2*FFT_LENGTH];
+        System.arraycopy(array, maxIndex -(FFT_LENGTH/2), fftArray, 0, FFT_LENGTH);
         fft.realForwardFull(fftArray);
-        return fftArray;
+        double[] fftWithIndex = new double[fftArray.length+1];
+        System.arraycopy(fftArray,0,fftWithIndex,0, fftArray.length);
+        fftWithIndex[fftWithIndex.length-1] = maxIndex;
+        return fftWithIndex;
     }
 
     private void writeColumn(double[] array, int columnNumber, HSSFSheet sheet, boolean isFFT) {
         try {
-            //print the axis on top of the column
-            String value = "";
-            switch (columnNumber % 3) {
-                case 0: {
-                    value = "X-axis";
-                    break;
-                }
-                case 1: {
-                    value = "Y-axis";
-                    break;
-                }
-                case 2: {
-                    value = "Z-axis";
-                    break;
-                }
-            }
-            Method method = createCell(sheet, 1, columnNumber, value);
-            /*Method method = getMethod(columnNumber);
-            Row currentRow = (Row) method.invoke(sheet, 1);
-            Cell currentCell = currentRow.createCell(columnNumber);
-            switch (columnNumber % 3) {
-                case 0: {
-                    currentCell.setCellValue("X-axis");
-                    break;
-                }
-                case 1: {
-                    currentCell.setCellValue("Y-axis");
-                    break;
-                }
-                case 2: {
-                    currentCell.setCellValue("Z-axis");
-                    break;
-                }
-            }*/
             if (!isFFT) {
+                //print the axis on top of the column
+                String value = "";
+                switch (columnNumber % 3) {
+                    case 0: {
+                        value = "X-axis";
+                        break;
+                    }
+                    case 1: {
+                        value = "Y-axis";
+                        break;
+                    }
+                    case 2: {
+                        value = "Z-axis";
+                        break;
+                    }
+                }
+                Method method = createCell(sheet, 1, columnNumber, value);
                 //print the values
                 for (int i = 0; i < array.length; i++) {
                     createCell(sheet, i + 2, columnNumber, array[i], method);
@@ -282,12 +258,17 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
                     currentCell.setCellValue(array[i]);*/
                 }
             } else {
-                for (int i = 0; i < array.length; i = i + 2) {
+                //print the axis on top of the column
+                String value = "Z-axis";
+                Method method = createCell(sheet, 1, columnNumber, value);
+                int i;
+                for (i = 0; i < array.length-1; i = i + 2) {
                     createCell(sheet, (i/2) + 2, columnNumber, array[i], method);/*
                     currentRow = (Row) method.invoke(sheet, i + 2);
                     currentCell = currentRow.createCell(columnNumber);
                     currentCell.setCellValue(array[i]);*/
                 }
+                createCell(sheet, (i/2)+2, columnNumber, array[array.length-1], method);
             }
         } catch (IllegalAccessException e) {
             e.printStackTrace();
