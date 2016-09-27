@@ -43,8 +43,8 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
     private HandlerThread backgroundAccelerometerThread, backgroundExcelThread;
     private boolean gathering;
     public final long SESSION_LENGTH = (long) 60000;
-    private double[] currentGravity;
-    private final int FFT_LENGTH = 10, FFT_PADDING = 15;
+    private final int FFT_LENGTH = 16, FFT_PADDING = 6;
+    private final double ACCELERATION_THRESHOLD = 3.0f;
     CountDownTimer timer = new CountDownTimer(SESSION_LENGTH, SESSION_LENGTH) {
         @Override
         public void onTick(long millisUntilFinished) {
@@ -60,7 +60,7 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         }
     };
     private int currentQueue;
-    private final String[] DATA_FIELD_NAMES = {"FILTERED DATA", "NON FILTERED DATA", "REAL FFT PART", "IMAGINARY FFT PART"};
+    private final String[] DATA_FIELD_NAMES = {"FILTERED DATA", "NON FILTERED DATA", "REAL FFT PART"};
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -110,14 +110,13 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
 
     private void initialize() {
         queue = new DataQueue[2];
-        currentGravity = new double[3];
         retrieveSensor();
         openBackgroundThread();
     }
 
     private void retrieveSensor() {
         manager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
-        accelerometer = manager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
+        accelerometer = manager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION);
     }
 
     private void openBackgroundThread() {
@@ -139,7 +138,6 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         }
     }
 
-    // TODO: 16/09/2016 save the excel
     private void saveExcel() {
         Log.i("tag", "started saving");
         //create the sheet
@@ -163,8 +161,15 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
                 double[] datas = queue[(saveQueue)].getAccelerationArray(filtered, axes);
                 writeColumn(datas, (3 * filtered) + axes, currentSheet, false);
                 if (axes == 2 && filtered == DataQueue.FILTERED) {
-                    datas = calculateFFT(datas, queue[saveQueue].getLength());
-                    writeColumn(datas, 6, currentSheet, true);
+                    int columnIndex=0;
+                    double[][] FFTs = calculateDriftingFFT(datas, queue[saveQueue].getLength());
+                    for(int i=0;i<FFTs.length;i++){
+                        if(FFTs[i]!= null){
+                            writeColumn(FFTs[i], FFT_PADDING+columnIndex++, currentSheet, true);
+                        }
+                    }
+                    //datas = calculateFFT(datas, queue[saveQueue].getLength());
+                    //writeColumn(datas, FFT_PADDING, currentSheet, true);
                 }
             }
         }
@@ -181,8 +186,6 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         } catch (IOException e) {
             e.printStackTrace();
         }
-        currentGravity = queue[saveQueue].getGravity();
-        Log.i("tag", currentGravity[0] + "-" + currentGravity[1] + "-" + currentGravity[2]);
         MediaScannerConnection.scanFile(this, new String[]{file.getPath()}, null, null);
         queue[saveQueue] = null;
         Log.i("tag", "done saving");
@@ -197,7 +200,7 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
     }
 
     private void startGathering() {
-        queue[currentQueue] = new DataQueue(DataQueue.BUTTERWORTH, 0.1, currentGravity);
+        queue[currentQueue] = new DataQueue(DataQueue.BUTTERWORTH, 0.1);
         ((Button) findViewById(R.id.gatherButton)).setText("stop data gathering");
         manager.registerListener(this, accelerometer, 5 * SAMPLE_RATE, backgroundAccelerometerHandler);
         gathering = true;
@@ -205,28 +208,51 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
     }
 
     private double[] calculateFFT(double[] array, int length) {
-        // TODO: 22/09/2016 calculate PADDING
         if (length < FFT_LENGTH) {
             return null;
         }
         DoubleFFT_1D fft = new DoubleFFT_1D(FFT_LENGTH);
-        //get the max of the clusters
-        double max = Math.abs(array[FFT_PADDING]);
-        int maxIndex = FFT_PADDING;
-        for (int i = FFT_PADDING+1; i < length; i++) {
+        //get the max of the array
+        double max = Math.abs(array[0]);
+        int maxIndex = 0;
+        for (int i = 1; i < length; i++) {
             if (Math.abs(array[i]) >= max) {
                 max = Math.abs(array[i]);
                 maxIndex = i;
             }
         }
         //fft it
-        double[] fftArray = new double[2*FFT_LENGTH];
-        System.arraycopy(array, maxIndex -(FFT_LENGTH/2), fftArray, 0, FFT_LENGTH);
+        double[] fftArray = new double[2 * FFT_LENGTH];
+        System.arraycopy(array, maxIndex - (FFT_LENGTH / 2), fftArray, 0, FFT_LENGTH);
         fft.realForwardFull(fftArray);
-        double[] fftWithIndex = new double[fftArray.length+1];
-        System.arraycopy(fftArray,0,fftWithIndex,0, fftArray.length);
-        fftWithIndex[fftWithIndex.length-1] = maxIndex;
+        double[] fftWithIndex = new double[fftArray.length + 1];
+        System.arraycopy(fftArray, 0, fftWithIndex, 0, fftArray.length);
+        fftWithIndex[fftWithIndex.length - 1] = maxIndex+1;
         return fftWithIndex;
+    }
+
+    private double[][] calculateDriftingFFT(double[] array, int length) {
+        if (length < FFT_LENGTH) {
+            return null;
+        }
+        double[][] returnArray = new double[array.length][];
+        for(int i=0;i<returnArray.length;i++){
+            returnArray[i] = null;
+        }
+        int returnArrayIndex = 0;
+        DoubleFFT_1D fft = new DoubleFFT_1D(FFT_LENGTH);
+        for (int i = (FFT_LENGTH / 2); i < array.length-(FFT_LENGTH/2)+1; i++) {
+            if (Math.abs(array[i]) > ACCELERATION_THRESHOLD) {
+                double[] fftArray = new double[2 * FFT_LENGTH];
+                System.arraycopy(array, i - (FFT_LENGTH / 2), fftArray, 0, FFT_LENGTH);
+                fft.realForwardFull(fftArray);
+                double[] fftWithIndex = new double[fftArray.length + 1];
+                System.arraycopy(fftArray, 0, fftWithIndex, 0, fftArray.length);
+                fftWithIndex[fftWithIndex.length - 1] = i+1;
+                returnArray[returnArrayIndex++] = fftWithIndex;
+            }
+        }
+        return returnArray;
     }
 
     private void writeColumn(double[] array, int columnNumber, HSSFSheet sheet, boolean isFFT) {
@@ -262,13 +288,13 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
                 String value = "Z-axis";
                 Method method = createCell(sheet, 1, columnNumber, value);
                 int i;
-                for (i = 0; i < array.length-1; i = i + 2) {
-                    createCell(sheet, (i/2) + 2, columnNumber, array[i], method);/*
+                for (i = 0; i < array.length - 1; i = i + 2) {
+                    createCell(sheet, (i / 2) + 2, columnNumber, array[i], method);/*
                     currentRow = (Row) method.invoke(sheet, i + 2);
                     currentCell = currentRow.createCell(columnNumber);
                     currentCell.setCellValue(array[i]);*/
                 }
-                createCell(sheet, (i/2)+2, columnNumber, array[array.length-1], method);
+                createCell(sheet, (i / 2) + 2, columnNumber, array[array.length - 1], method);
             }
         } catch (IllegalAccessException e) {
             e.printStackTrace();
@@ -285,7 +311,7 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
         Cell currentCell = currentRow.createCell(columnNumber);
         if (value instanceof String) {
             currentCell.setCellValue((String) value);
-        } else{
+        } else {
             currentCell.setCellValue((Double) value);
         }
     }
@@ -337,14 +363,6 @@ public class MainActivity extends AppCompatActivity implements SensorEventListen
             i++;
         }
         return returnFile;
-    }
-
-    public void resetGravity(View view) {
-        if (gathering) {
-            Toast.makeText(getApplicationContext(), "stop gathering first", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        currentGravity = new double[3];
     }
 }
 
