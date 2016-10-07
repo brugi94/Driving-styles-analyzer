@@ -7,6 +7,8 @@ import android.hardware.SensorEvent;
  */
 public class Data {
     public double[] accelerations;
+    public float speed;
+    public double latitude, longitude;
     public Data(){
         accelerations = new double[3];
     }
@@ -16,8 +18,11 @@ public class Data {
             accelerations[i] = datas.values[i];
         }
     }
-    public Data(Data input){
+    public Data(Data input, float speed, double latitude, double longitude){
         this();
+        this.speed = speed;
+        this.latitude = latitude;
+        this.longitude = longitude;
         for(int axys=0;axys<3;axys++){
             this.accelerations[axys] = input.accelerations[axys];
         }

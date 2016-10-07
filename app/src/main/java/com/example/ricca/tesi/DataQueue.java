@@ -11,17 +11,13 @@ public class DataQueue {
     private int length;
     private double[] butterworthCoefficients;
     private double lowPassCoefficient;
-    private float highPassCoefficient;
-    private Data[] highFilteredDatas;
-    private int type, currentLastData;
-    private int lastOverThresholdValue, overThresholdAxis;
+    private int type;
     private final static double THRESHOLD = 3.0f;
 
     public DataQueue() {
         filteredDatas = new Data[10];
         nonFilteredDatas = new Data[10];
         length = 0;
-        highPassCoefficient = 0.1F;
     }
     public int getLength(){
         return length;
@@ -38,7 +34,6 @@ public class DataQueue {
         this.type = type;
         switch (type) {
             case BUTTERWORTH: {
-                highFilteredDatas = new Data[3];
                 butterworthCoefficients = new double[4];
                 //1st and 3rd coefficients are equal, so the array is long 4
                 double omega = 1.0 / (Math.tan(Math.PI * parameter));
@@ -56,7 +51,10 @@ public class DataQueue {
         }
     }
 
-    public synchronized void add(Data sample) {
+    /*
+    adds and filters data to the queue
+     */
+    public synchronized void add(Data sample, float speed, double latitude, double longitude) {
         if (filteredDatas.length == length) {
             resize(FILTERED);
         }
@@ -65,20 +63,11 @@ public class DataQueue {
         }
 
         //save the non-filtered data
-        nonFilteredDatas[length] = new Data(sample);
+        nonFilteredDatas[length] = new Data(sample, speed, latitude, longitude);
 
 
         //filter the data
         for (int axes = 0; axes < 3; axes++) {
-
-            //HIGH-PASS filter
-            //gravity[axes] = (highPassCoefficient * sample.accelerations[axes]) + (1 - highPassCoefficient) * gravity[axes];
-            //sample.accelerations[axes] -= gravity[axes];
-            //we use highFilteredDatas to keep the last 2 values of datas that have been high filtered (will need them when butterworth filtering)
-            /*if ((axes == 2) && (type == BUTTERWORTH)) {
-                highFilteredDatas[currentLastData] = new Data(sample);
-            }*/
-
 
             //LOW-PASS or BUTTERWORTH
             switch (type) {
@@ -90,24 +79,6 @@ public class DataQueue {
                 }
                 case BUTTERWORTH: {
                     if (length >= 2) {
-                        /*//calculate which highfiltereddatas i need to use (using a circular array to save them)
-                        int first, second;
-                        switch (currentLastData) {
-                            case 0: {
-                                first = 2;
-                                second = 1;
-                                break;
-                            }
-                            case 1: {
-                                first = 0;
-                                second = 2;
-                                break;
-                            }
-                            default: {
-                                first = currentLastData - 1;
-                                second = currentLastData - 2;
-                            }
-                        }*/
                         sample.accelerations[axes] *= butterworthCoefficients[0];
                         sample.accelerations[axes] += butterworthCoefficients[1] * nonFilteredDatas[length-1].accelerations[axes]; //swap nonFilteredDatas with highFilteredDatas[first]
                         sample.accelerations[axes] += butterworthCoefficients[0] * nonFilteredDatas[length-2].accelerations[axes]; //swap nonFilteredDatas with highFilteredDatas[second]
@@ -117,19 +88,9 @@ public class DataQueue {
                     break;
                 }
             }
-            /*if (axes == 2) {
-                currentLastData = (currentLastData + 1) % 3;
-            }
-        }
-        for(int axes=0;axes<3;axes++){
-            if(sample.accelerations[axes]>THRESHOLD && length>5){
-                lastOverThresholdValue = length;
-                overThresholdAxis = axes;
-                break;
-            }*/
         }
         //add to filtered array
-        filteredDatas[length++] = new Data(sample);
+        filteredDatas[length++] = new Data(sample, speed, latitude, longitude);
     }
 
     private void resize(int array) {
@@ -179,4 +140,15 @@ public class DataQueue {
         }
     }
 
+    public float[] getSpeed(){
+        float[] speeds = new float[length];
+        for(int i=0;i<length;i++){
+            speeds[i] = filteredDatas[i].speed;
+        }
+        return speeds;
+    }
+
+    public Data getData(int index){
+        return filteredDatas[index];
+    }
 }

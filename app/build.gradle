@@ -23,6 +23,5 @@ dependencies {
     compile fileTree(include: ['*.jar'], dir: 'libs')
     testCompile 'junit:junit:4.12'
     compile 'com.android.support:appcompat-v7:24.2.1'
-    compile files('libs/JTransforms-3.1-with-dependencies.jar')
     compile files('libs/poi-3.14-20160307.jar')
 }
