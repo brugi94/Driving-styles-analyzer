@@ -268,6 +268,7 @@ public class gathererService extends Service implements SensorEventListener, Loc
         }
         long time = System.currentTimeMillis();
         double timeDelta = ((double) (time - currentTime)) / 10e2;
+        Log.i("tag", timeDelta + "");
         currentTime = time;
         queue.add(new Data(event), currentSpeed, currentLatitude, currentLongitude);
         analyzeData(queue.getData(queue.getLength() - 1), timeDelta);
