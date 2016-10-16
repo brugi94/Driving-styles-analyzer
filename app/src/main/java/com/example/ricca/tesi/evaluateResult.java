@@ -5,10 +5,11 @@ package com.example.ricca.tesi;
  */
 public class evaluateResult {
     public final static int NOT_SAFE = 1, SAFE = 0, NOT_SAFE_LOW_SPEED = 2; //return values from the method evaluate
-    public int length, safetyValue;
+    public int safetyValue;
+    public double powerDelta;
 
-    public evaluateResult(int length, int safetyValue){
-        this.length = length;
+    public evaluateResult(double powerDelta, int safetyValue) {
+        this.powerDelta = powerDelta;
         this.safetyValue = safetyValue;
     }
 }

@@ -1,9 +1,17 @@
 package com.example.ricca.tesi;
 
 import android.content.ActivityNotFoundException;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
 
+import android.content.IntentFilter;
+import android.content.pm.PackageManager;
+import android.os.Build;
 import android.speech.RecognizerIntent;
+import android.support.v4.app.ActivityCompat;
+import android.support.v4.content.ContextCompat;
+import android.support.v4.content.LocalBroadcastManager;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
 import android.view.View;
@@ -12,6 +20,7 @@ import android.widget.Toast;
 
 import java.util.ArrayList;
 import java.util.Locale;
+import java.util.jar.Manifest;
 
 public class MainActivity extends AppCompatActivity {
     private final int REQ_CODE_SPEECH_INPUT = 0;
@@ -29,20 +38,22 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onPause() {
         super.onPause();
-
+        LocalBroadcastManager.getInstance(this).unregisterReceiver(onBroadcast);
     }
 
     public void toggleGathering(View view) {
-        if (gathering) {
-            ((Button) findViewById(R.id.gatherButton)).setText("start data gathering");
-            gathering = false;
+        //if we don't have proper permissions, ask them. Otherwise toggle gathering
+        if (!checkPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) ||
+                !checkPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION) ||
+                !checkPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)) {
+            requestPermission(android.Manifest.permission.ACCESS_FINE_LOCATION, 0);
+            requestPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION, 0);
+            requestPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE, 0);
         } else {
-            ((Button) findViewById(R.id.gatherButton)).setText("stop data gathering");
-            gathering = true;
+            Intent intent = new Intent(this, gathererService.class);
+            intent.putExtra(INTENT_INT_TAG, EVENT_TOGGLE);
+            startService(intent);
         }
-        Intent intent = new Intent(this, gathererService.class);
-        intent.putExtra(INTENT_INT_TAG, EVENT_TOGGLE);
-        startService(intent);
     }
 
     @Override
@@ -55,23 +66,29 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        LocalBroadcastManager.getInstance(this).registerReceiver((onBroadcast)
+                , new IntentFilter(gathererService.INTENT_TAG));
     }
 
     public void promptSpeechInput(View view) {
-        Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault());
-        try {
-            startActivityForResult(intent, REQ_CODE_SPEECH_INPUT);
-        } catch (ActivityNotFoundException a) {
-            Toast.makeText(getApplicationContext(),
-                    "not supported",
-                    Toast.LENGTH_SHORT).show();
+        if (gathering) {
+            Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault());
+            try {
+                startActivityForResult(intent, REQ_CODE_SPEECH_INPUT);
+            } catch (ActivityNotFoundException a) {
+                Toast.makeText(getApplicationContext(),
+                        "not supported",
+                        Toast.LENGTH_SHORT).show();
+            }
+            intent = new Intent(this, gathererService.class);
+            intent.putExtra(INTENT_INT_TAG, EVENT_INDEX);
+            startService(intent);
+        } else {
+            Toast.makeText(getApplicationContext(), "Start gathering first", Toast.LENGTH_SHORT).show();
         }
-        intent = new Intent(this, gathererService.class);
-        intent.putExtra(INTENT_INT_TAG, EVENT_INDEX);
-        startService(intent);
     }
 
     /**
@@ -95,6 +112,39 @@ public class MainActivity extends AppCompatActivity {
             }
 
         }
+    }
+
+    private BroadcastReceiver onBroadcast = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context ctxt, Intent i) {
+            if (gathering) {
+                ((Button) findViewById(R.id.gatherButton)).setText("start data gathering");
+                gathering = false;
+            } else {
+                ((Button) findViewById(R.id.gatherButton)).setText("stop data gathering");
+                gathering = true;
+            }
+        }
+    };
+
+    /**
+     * @param permission the requested permission
+     */
+    private void requestPermission(String permission, int id) {
+        if ((Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) && (!checkPermission(permission))) {
+            ActivityCompat.requestPermissions(this,
+                    new String[]{permission},
+                    id);
+        }
+    }
+
+    /**
+     * @param permission the permission to check for
+     * @return true if granted, false otherwise
+     */
+    private boolean checkPermission(String permission) {
+        return ((ContextCompat.checkSelfPermission(getApplicationContext(),
+                permission)) == PackageManager.PERMISSION_GRANTED);
     }
 }
 

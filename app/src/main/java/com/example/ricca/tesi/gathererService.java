@@ -17,25 +17,24 @@ import android.media.MediaPlayer;
 import android.media.MediaScannerConnection;
 import android.media.RingtoneManager;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
-import android.os.CountDownTimer;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
+import android.speech.tts.TextToSpeech;
 import android.support.v4.app.ActivityCompat;
+import android.support.v4.content.LocalBroadcastManager;
 import android.util.Log;
 import android.widget.Toast;
 
-import org.apache.poi.hssf.usermodel.HSSFCellStyle;
 import org.apache.poi.hssf.usermodel.HSSFSheet;
 import org.apache.poi.hssf.usermodel.HSSFWorkbook;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellStyle;
 import org.apache.poi.ss.usermodel.CreationHelper;
-import org.apache.poi.ss.usermodel.IndexedColors;
 import org.apache.poi.ss.usermodel.Row;
-import org.apache.poi.ss.usermodel.Sheet;
 
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -43,25 +42,27 @@ import java.io.FileOutputStream;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Date;
+import java.util.Locale;
 
 /**
  * Created by ricca on 03/10/2016.
  */
 public class gathererService extends Service implements SensorEventListener, LocationListener {
+    LocalBroadcastManager broadcaster;
     private SensorManager manager;
     private Sensor accelerometer;
     private DataQueue queue;
     private Handler backgroundAccelerometerHandler;
-    public final int SAMPLE_RATE = (int) 10E3, LATITUDE_COLUMN = 5, LONGITUDE_COLUMN = 6, EVENT_TYPE_COLUMN = 3, TIMESTAMP_COLUMN = 4, NO_LOCATION_EVENT = -1;
+    public final int SAMPLE_RATE = (int) 10E3, EXPLANATION_COLUMN = 9, POWER_COLUMN = 4, LATITUDE_COLUMN = 7, LONGITUDE_COLUMN = 8, EVENT_TYPE_COLUMN = 5, TIMESTAMP_COLUMN = 6, NO_LOCATION_EVENT = -1, SPEED_COLUMN = 3, CURRENT_AXIS = 1;
     private HandlerThread backgroundAccelerometerThread;
-    private boolean isGathering, isSaving;
+    private boolean isGathering, isSaving, isFirst;
+    public final static String INTENT_TAG = "tag", INTENT_MSG = "msg";
     private int rowNumber = 2, oldEventSafety;
-    private final String SUDDEN_BRAKE = "SUDDEN BRAKE";
-    private final String[] DATA_FIELD_NAMES = {"FILTERED DATA"}, SECOND_ROW_STRINGS = {"x-axis", "y-axis", "z-axis", "event type", "timestamp", "latitude", "longitude"};
+    private final String SUDDEN_BRAKE = "Sudden brake";
+    private final String[] DATA_FIELD_NAMES = {"FILTERED DATA"}, SECOND_ROW_STRINGS = {"x-axis", "y-axis", "z-axis", "speed", "power delta", "event type", "timestamp", "latitude", "longitude"};
     private ArrayList<Integer> RecordedIndexes;
     private ArrayList<String> RecordedEvents;
     private ArrayList<Date> recordedTimeStamps;
@@ -69,15 +70,26 @@ public class gathererService extends Service implements SensorEventListener, Loc
     private float currentSpeed;
     private double currentLatitude, currentLongitude;
     private dataEvaluator evaluator;
-    private CellStyle redFormat, orangeFormat, dateFormat;
+    private CellStyle dateFormat;
     private HSSFWorkbook wb;
     private HSSFSheet sheet;
     private MediaPlayer player;
     private String currentFileName;
+    private File outputFolder;
+    private TextToSpeech t1;
+    private long currentTime;
 
     @Override
     public void onCreate() {
         super.onCreate();
+        t1 = new TextToSpeech(getApplicationContext(), new TextToSpeech.OnInitListener() {
+            @Override
+            public void onInit(int status) {
+                if (status != TextToSpeech.ERROR) {
+                    t1.setLanguage(Locale.ITALY);
+                }
+            }
+        });
     }
 
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -87,16 +99,24 @@ public class gathererService extends Service implements SensorEventListener, Loc
                 switch (intent.getIntExtra(MainActivity.INTENT_INT_TAG, -1)) {
                     case MainActivity.EVENT_TOGGLE: {
                         synchronized (this) {
+
                             if (isGathering) {
                                 stopGathering();
-                                saveExcel();
+                                backgroundAccelerometerHandler.post(new Runnable() {
+                                    @Override
+                                    public void run() {
+                                        saveExcel();
+                                    }
+                                });
                                 System.gc();
                             } else {
                                 startGathering();
                             }
+
                             break;
                         }
                     }
+
                     case MainActivity.EVENT_INDEX: {
                         if (isGathering) {
                             RecordedIndexes.add(queue.getLength());
@@ -112,6 +132,8 @@ public class gathererService extends Service implements SensorEventListener, Loc
                     RecordedEvents.add(intent.getStringExtra(MainActivity.INTENT_STRING_TAG));
                 }
             }
+        } else {
+            Toast.makeText(getApplicationContext(), "saving excel, please wait", Toast.LENGTH_LONG).show();
         }
         return START_STICKY;
     }
@@ -130,13 +152,20 @@ public class gathererService extends Service implements SensorEventListener, Loc
             //                                          int[] grantResults)
             // to handle the case where the user grants the permission. See the documentation
             // for ActivityCompat#requestPermissions for more details.
-            Toast.makeText(this, "no permissions", Toast.LENGTH_SHORT);
+            Toast.makeText(this, "no permissions", Toast.LENGTH_SHORT).show();
             return;
         }
-        logEvent(NO_LOCATION_EVENT, new Date(), "gathering started");
 
-        locationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 0, 0, this);
+
+        locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 0, 0, this);
         isGathering = true;
+        sendBroadcast();
+        //create the output folder
+        outputFolder = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), getFileName());
+        if (!outputFolder.exists()) {
+            outputFolder.mkdir();
+        }
+        logEvent(NO_LOCATION_EVENT, new Date(), "gathering started");
     }
 
     /*
@@ -144,7 +173,7 @@ public class gathererService extends Service implements SensorEventListener, Loc
      */
     private void initialize() {
         if (evaluator == null) {
-            evaluator = new dataEvaluator(5 * SAMPLE_RATE);
+            evaluator = new dataEvaluator();
         }
 
         try {
@@ -161,8 +190,9 @@ public class gathererService extends Service implements SensorEventListener, Loc
         recordedTimeStamps = new ArrayList<Date>();
         RecordedIndexes = new ArrayList<Integer>();
         RecordedEvents = new ArrayList<String>();
-
+        broadcaster = LocalBroadcastManager.getInstance(this);
         rowNumber = 2;
+        isFirst = true;
         setupExcel();
 
         retrieveSensor();
@@ -195,6 +225,12 @@ public class gathererService extends Service implements SensorEventListener, Loc
             Cell currentCell = currentRow.createCell(i);
             currentCell.setCellValue(SECOND_ROW_STRINGS[i]);
         }
+
+        Cell currentCell = currentRow.createCell(EXPLANATION_COLUMN);
+        currentCell.setCellValue("power Delta è la differenza di energia cinetica dall'inizio della frenata (accelerazione <0) fino all'istante attuale, diviso la durata della frenata");
+        currentRow = sheet.createRow(2);
+        currentCell = currentRow.createCell(EXPLANATION_COLUMN);
+        currentCell.setCellValue("Gli eventi che hanno un tipo sono quelli registrati a voce, quelli che non lo hanno individuati dall'app");
     }
 
 
@@ -202,7 +238,7 @@ public class gathererService extends Service implements SensorEventListener, Loc
         if (locationManager == null) {
             locationManager = (LocationManager) this.getSystemService(Context.LOCATION_SERVICE);
             if (!locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-                Toast.makeText(getApplicationContext(), "gps not allowed", Toast.LENGTH_LONG);
+                Toast.makeText(getApplicationContext(), "gps not allowed", Toast.LENGTH_LONG).show();
             }
         }
         if (manager == null) {
@@ -227,43 +263,54 @@ public class gathererService extends Service implements SensorEventListener, Loc
      */
     @Override
     public void onSensorChanged(SensorEvent event) {
+        if (currentTime == 0) {
+            currentTime = System.currentTimeMillis();
+        }
+        long time = System.currentTimeMillis();
+        double timeDelta = ((double) (time - currentTime)) / 10e2;
+        currentTime = time;
         queue.add(new Data(event), currentSpeed, currentLatitude, currentLongitude);
-        analyzeData(queue.getData(queue.getLength() - 1));
+        analyzeData(queue.getData(queue.getLength() - 1), timeDelta);
     }
 
     /*
     evaluates the sample's safety, prints the sample on excel and depending on the safety of the sample will take some actions:
-    1)if it's risky an alarm will be started, the event will be logged and the sample's cell background will be red
-    2)if it's risky but the speed is low, the sample's cell background will be orange
+    1)if it's risky an alarm will be started, the event will be logged
     3)if it's safe, the sample is printed on the excel
      */
-    private void analyzeData(Data sample) {
+    private void analyzeData(Data sample, double timeDelta) {
 
 
         //evaluate the acquired sample
-        evaluateResult result = evaluator.evaluate(sample.accelerations[2], sample.speed);
+        evaluateResult result = evaluator.evaluate(sample.accelerations[CURRENT_AXIS], sample.speed, timeDelta);
 
         //print the values on the excel
         try {
             for (int i = 0; i < 3; i++) {
-                //if it's the Z-axis
-                if (i != 2) {
-                    //create not colored cell
-                    createCell(sheet, rowNumber, i, sample.accelerations[i], wb, null);
-                } else {
-                    //create colored cell based on result
-                    createCell(sheet, rowNumber, i, sample.accelerations[i], wb, result);
-                }
+                createCell(sheet, rowNumber, i, sample.accelerations[i]);
             }
+            //if we're slowing print the power delta
+            if (result.powerDelta < 0) {
+                createCell(sheet, rowNumber - 1, POWER_COLUMN, result.powerDelta);
+            }
+
+            //print the speed
+            createCell(sheet, rowNumber, SPEED_COLUMN, currentSpeed);
 
             //if it's different from the old event
             if (result.safetyValue != oldEventSafety) {
+                if (result.safetyValue == evaluateResult.NOT_SAFE) {
 
-                //if it's not safe log the event and sound an alarm
-                if (result.safetyValue == evaluateResult.NOT_SAFE || currentSpeed != 0) {
-                    if (result.safetyValue == evaluateResult.NOT_SAFE) {
-                        logEvent(queue.getLength() - 1, new Date(), SUDDEN_BRAKE);
-                    }
+                    //print timestamp, lat and long
+                    createCell(sheet, rowNumber - 1, LONGITUDE_COLUMN, currentLongitude);
+                    createCell(sheet, rowNumber - 1, LATITUDE_COLUMN, currentLatitude);
+                    createCell(sheet, rowNumber - 1, TIMESTAMP_COLUMN, new Date());
+
+                    //log the event
+                    logEvent(queue.getLength() - 1, new Date(), SUDDEN_BRAKE);
+
+                    /*
+                    //sound the alarm
                     if (!player.isPlaying()) {
                         player.start();
                         //stop it after 10 seconds
@@ -283,8 +330,10 @@ public class gathererService extends Service implements SensorEventListener, Loc
                                 }
                             }
                         }.start();
-                    }
+                    }*/
                 }
+
+
 
                 /* if it's different from safe, print a record on the excel sheet
                 if (result.safetyValue != evaluateResult.SAFE) {
@@ -324,7 +373,14 @@ public class gathererService extends Service implements SensorEventListener, Loc
             locationManager.removeUpdates(this);
             logEvent(NO_LOCATION_EVENT, new Date(), "gathering stopped");
             isGathering = false;
+            sendBroadcast();
         }
+    }
+
+    private void sendBroadcast() {
+        Intent intent = new Intent(INTENT_TAG);
+        intent.putExtra(INTENT_TAG, INTENT_MSG);
+        broadcaster.sendBroadcast(intent);
     }
 
     /*
@@ -334,7 +390,6 @@ public class gathererService extends Service implements SensorEventListener, Loc
         isSaving = true;
         Log.i("tag", "started saving");
 
-
         printEvents();
 
         Log.i("tag", "write");
@@ -343,8 +398,7 @@ public class gathererService extends Service implements SensorEventListener, Loc
         String outputFileName = getFileName();
         File outputFile = null;
         try {
-            File folder = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-            outputFile = new File(folder, outputFileName + ".xls");
+            outputFile = new File(outputFolder, "values.xls");
             FileOutputStream outputStream = new FileOutputStream(outputFile);
             wb.write(outputStream);
             outputStream.close();
@@ -410,13 +464,19 @@ public class gathererService extends Service implements SensorEventListener, Loc
     public void onDestroy() {
         closeBackgroundThread();
         stopGathering();
+        player.release();
     }
 
     /*
     inserts a value in the selected cell
      */
-    private <T> void createCell(HSSFSheet sheet, int rowNumber, int columnNumber, T value, Method method, HSSFWorkbook wb, evaluateResult result) throws InvocationTargetException, IllegalAccessException {
-        Row currentRow = (Row) method.invoke(sheet, rowNumber);
+    private <T> void createCell(HSSFSheet sheet, int rowNumber, int columnNumber, T value) throws InvocationTargetException, IllegalAccessException {
+        Row currentRow = null;
+        if (sheet.getRow(rowNumber) == null) {
+            currentRow = sheet.createRow(rowNumber);
+        } else {
+            currentRow = sheet.getRow(rowNumber);
+        }
         Cell currentCell = currentRow.createCell(columnNumber);
         if (value instanceof String) {
             currentCell.setCellValue((String) value);
@@ -424,70 +484,42 @@ public class gathererService extends Service implements SensorEventListener, Loc
         if (value instanceof Double) {
             currentCell.setCellValue((Double) value);
             //color the cell according to safetyvalue
-            if (columnNumber == 2) {
-                switch (result.safetyValue) {
+            /*if (columnNumber == CURRENT_AXIS) {
+                switch (result) {
                     case evaluateResult.NOT_SAFE: {
-                        redFormat = wb.createCellStyle();
+                        CellStyle redFormat = wb.createCellStyle();
                         redFormat.setFillForegroundColor(IndexedColors.RED.index);
                         redFormat.setFillPattern(HSSFCellStyle.SOLID_FOREGROUND);
-                        for (int i = 0; i < result.length; i++) {
-                            currentRow = (Row) method.invoke(sheet, rowNumber - i);
-                            currentCell = currentRow.getCell(columnNumber);
-                            currentCell.setCellStyle(redFormat);
-                        }
+
+                        currentRow = sheet.getRow(rowNumber);
+                        currentCell = currentRow.getCell(columnNumber);
+                        currentCell.setCellStyle(redFormat);
+                        Log.i("tag", "colored row " + (rowNumber));
+
                         break;
                     }
                     case evaluateResult.NOT_SAFE_LOW_SPEED: {
-                        orangeFormat = wb.createCellStyle();
+                        CellStyle orangeFormat = wb.createCellStyle();
                         orangeFormat.setFillForegroundColor(IndexedColors.ORANGE.index);
                         orangeFormat.setFillPattern(HSSFCellStyle.SOLID_FOREGROUND);
-                        for (int i = 0; i < result.length; i++) {
-                            currentRow = (Row) method.invoke(sheet, rowNumber - i);
-                            currentCell = currentRow.getCell(columnNumber);
-                            currentCell.setCellStyle(orangeFormat);
-                        }
+                        currentRow = (Row) method.invoke(sheet, rowNumber);
+                        currentCell = currentRow.getCell(columnNumber);
+                        currentCell.setCellStyle(orangeFormat);
+
                         break;
                     }
                 }
-            }
+            }*/
         }
         if (value instanceof Date) {
             currentCell.setCellValue((Date) value);
             currentCell.setCellStyle(dateFormat);
         }
+        if (value instanceof Float) {
+            currentCell.setCellValue((Float) value);
+        }
     }
 
-    private <T> Method createCell(HSSFSheet sheet, int rowNumber, int columnNumber, T value, HSSFWorkbook wb, evaluateResult result) throws InvocationTargetException, IllegalAccessException {
-        Method method = getMethod(columnNumber);
-        if (result != null) {
-            createCell(sheet, rowNumber, columnNumber, value, method, wb, result);
-        } else {
-            createCell(sheet, rowNumber, columnNumber, value, method, wb, new evaluateResult(0, evaluateResult.SAFE));
-        }
-        return method;
-    }
-
-    /*
-    returns getRow or createRow method properly
-     */
-    private Method getMethod(int columnNumber) {
-        Method returnMethod = null;
-        try {
-            Class<?> c = Class.forName(Sheet.class.getName());
-            String methodName = "";
-            if (columnNumber != 0) {
-                methodName = "getRow";
-            } else {
-                methodName = "createRow";
-            }
-            returnMethod = c.getMethod(methodName, int.class);
-        } catch (NoSuchMethodException e) {
-            e.printStackTrace();
-        } catch (ClassNotFoundException e) {
-            e.printStackTrace();
-        }
-        return returnMethod;
-    }
 
     //returns a proper file for saving the excel/log
     private String getFileName() {
@@ -497,10 +529,12 @@ public class gathererService extends Service implements SensorEventListener, Loc
             int month = calendar.get(Calendar.MONTH) + 1;
             int year = calendar.get(Calendar.YEAR);
             int day = calendar.get(Calendar.DAY_OF_MONTH);
+            int minute = calendar.get(Calendar.MINUTE);
+            int hours = calendar.get(Calendar.HOUR_OF_DAY);
             int i = 0;
             while (true) {
-                String name = "tesi-" + day + "-" + month + "-" + year + "-" + i;
-                File returnFileName = new File(folder.getPath(), name + ".txt");
+                String name = "tesi-" + day + "-" + month + "-" + year + "-" + hours + ":" + ((minute < 10) ? "0" + minute : minute) + "-" + i;
+                File returnFileName = new File(folder.getPath(), name);
                 if (!returnFileName.exists()) {
                     currentFileName = name;
                     return name;
@@ -525,6 +559,12 @@ public class gathererService extends Service implements SensorEventListener, Loc
     @Override
     public void onLocationChanged(Location location) {
         if (location.hasSpeed()) {
+            if (currentSpeed == 0) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && isFirst) {
+                    t1.speak("velocità ricevuta", TextToSpeech.QUEUE_ADD, null, "velocità request");
+                    isFirst = false;
+                }
+            }
             currentSpeed = location.getSpeed();
         }
         if (location.getLatitude() != 0 && location.getLongitude() != 0) {
@@ -552,11 +592,16 @@ public class gathererService extends Service implements SensorEventListener, Loc
     prints an event on the log file
      */
     private void logEvent(int index, Date currentDate, String eventDescription) {
-        String outputFileName = getFileName();
         try {
-            File folder = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-            File outputFile = new File(folder, outputFileName + ".txt");
-            FileWriter writer = new FileWriter(outputFile, true);
+            File outputFile = new File(outputFolder, "log.txt");
+            FileWriter writer = null;
+            boolean dw;
+            if (!outputFile.exists()) {
+                if (!outputFile.createNewFile()) {
+                    Toast.makeText(getApplicationContext(), "cant create", Toast.LENGTH_SHORT);
+                }
+            }
+            writer = new FileWriter(outputFile, true);
 
             //write timestamp and description only if no location
             writer.append(currentDate.toString() + " " + eventDescription);
@@ -573,4 +618,6 @@ public class gathererService extends Service implements SensorEventListener, Loc
             e.printStackTrace();
         }
     }
+
+
 }

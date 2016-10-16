@@ -4,35 +4,41 @@ package com.example.ricca.tesi;
  * Created by ricca on 04/10/2016.
  */
 public class dataEvaluator {
-    private float startSpeed;
-    private int notSafeCount;
-    private final float NOT_SAFE_TIME_THRESHOLD = 0.25f; //brake event must be at least 1s long
-    private final float SPEED_THRESHOLD = 8.3f; // more or less 30km/h
-    private final double ACCELERATION_THRESHOLD = 3.0f;
-    private int notSafeThreshold;
+    private float startSpeed, currentCalculatedSpeed, oldSpeed;
+    private final double NOT_SAFE_THRESHOLD = 40; //brake event's power must be higher than this (which is the power a brake from 50km/h to 30km/h over 3 seconds generates)
+    private double totalTimeDelta;
+    private double oldSample;
 
-    public dataEvaluator(double sampleRate) {
-        notSafeThreshold = (int) ((NOT_SAFE_TIME_THRESHOLD / sampleRate) * 10E5);
-        notSafeCount = 0;
+    public dataEvaluator() {
     }
 
-    public evaluateResult evaluate(double sample, float speed) {
-        if (Math.abs(sample) <= -ACCELERATION_THRESHOLD) {
-            if (startSpeed != 0 && speed != 0) {
-                startSpeed = speed;
+    public evaluateResult evaluate(double sample, float speed, double timeDelta) {
+        if (oldSample >= 0) {
+            if (startSpeed == 0 && oldSpeed != 0) {
+                startSpeed = currentCalculatedSpeed = oldSpeed;
             }
-            notSafeCount++;
-            if (notSafeCount >= notSafeThreshold) {
-                if (startSpeed >= SPEED_THRESHOLD) {
-                    return new evaluateResult(notSafeCount, evaluateResult.NOT_SAFE);
+            if (startSpeed != 0) {
+                totalTimeDelta += timeDelta;
+                double deltaV = -oldSample * timeDelta;
+                currentCalculatedSpeed += deltaV;
+                double currentEnergyDelta = Math.pow(currentCalculatedSpeed, 2) - Math.pow(startSpeed, 2);
+                double powerDelta = currentEnergyDelta / totalTimeDelta;
+
+                //update values
+                oldSample = sample;
+                oldSpeed = speed;
+                if (powerDelta <= 0 * NOT_SAFE_THRESHOLD) {
+                    return new evaluateResult(powerDelta, evaluateResult.NOT_SAFE);
                 } else {
-                    return new evaluateResult(notSafeCount, evaluateResult.NOT_SAFE_LOW_SPEED);
+                    return new evaluateResult(powerDelta, evaluateResult.SAFE);
                 }
             }
-        } else {
-            startSpeed = 0;
-            notSafeCount = 0;
         }
-        return new evaluateResult(notSafeCount, evaluateResult.SAFE);
+        oldSample = sample;
+        oldSpeed = speed;
+        startSpeed = 0;
+        currentCalculatedSpeed = 0;
+        totalTimeDelta = 0;
+        return new evaluateResult(0, evaluateResult.SAFE);
     }
 }

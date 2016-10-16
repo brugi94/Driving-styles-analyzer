@@ -12,6 +12,7 @@ public class DataQueue {
     private double[] butterworthCoefficients;
     private double lowPassCoefficient;
     private int type;
+    private long currentTime;
     private final static double THRESHOLD = 3.0f;
 
     public DataQueue() {
