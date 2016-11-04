@@ -46,6 +46,8 @@ import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.Locale;
+import java.util.Timer;
+import java.util.TimerTask;
 
 /**
  * Created by ricca on 03/10/2016.
@@ -56,13 +58,13 @@ public class gathererService extends Service implements SensorEventListener, Loc
     private Sensor accelerometer;
     private DataQueue queue;
     private Handler backgroundAccelerometerHandler;
-    public final int SAMPLE_RATE = (int) 10E3, EXPLANATION_COLUMN = 9, POWER_COLUMN = 4, LATITUDE_COLUMN = 7, LONGITUDE_COLUMN = 8, EVENT_TYPE_COLUMN = 5, TIMESTAMP_COLUMN = 6, NO_LOCATION_EVENT = -1, SPEED_COLUMN = 3, CURRENT_AXIS = 1;
+    public final int TIME_DELTA_COLUMN = 5, SAMPLE_RATE = (int) 10E3, EXPLANATION_COLUMN = 9, POWER_COLUMN = 4, LATITUDE_COLUMN = 8, LONGITUDE_COLUMN = 9, EVENT_TYPE_COLUMN = 6, TIMESTAMP_COLUMN = 7, NO_LOCATION_EVENT = -1, SPEED_COLUMN = 3, CURRENT_AXIS = 1;
     private HandlerThread backgroundAccelerometerThread;
     private boolean isGathering, isSaving, isFirst;
     public final static String INTENT_TAG = "tag", INTENT_MSG = "msg";
     private int rowNumber = 2, oldEventSafety;
-    private final String SUDDEN_BRAKE = "Sudden brake";
-    private final String[] DATA_FIELD_NAMES = {"FILTERED DATA"}, SECOND_ROW_STRINGS = {"x-axis", "y-axis", "z-axis", "speed", "power delta", "event type", "timestamp", "latitude", "longitude"};
+    private final String SUDDEN_BRAKE = "Sudden brake", SUDDEN_ACCELERATION = "Sudden acceleration";
+    private final String[] DATA_FIELD_NAMES = {"FILTERED DATA"}, SECOND_ROW_STRINGS = {"x-axis", "y-axis", "z-axis", "speed", "power delta", "time delta in seconds", "event type", "timestamp", "latitude", "longitude"};
     private ArrayList<Integer> RecordedIndexes;
     private ArrayList<String> RecordedEvents;
     private ArrayList<Date> recordedTimeStamps;
@@ -78,18 +80,13 @@ public class gathererService extends Service implements SensorEventListener, Loc
     private File outputFolder;
     private TextToSpeech t1;
     private long currentTime;
+    private Timer timer;
+    private final int SESSION_DURATION = 600000;
 
     @Override
     public void onCreate() {
         super.onCreate();
-        t1 = new TextToSpeech(getApplicationContext(), new TextToSpeech.OnInitListener() {
-            @Override
-            public void onInit(int status) {
-                if (status != TextToSpeech.ERROR) {
-                    t1.setLanguage(Locale.ITALY);
-                }
-            }
-        });
+
     }
 
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -105,7 +102,7 @@ public class gathererService extends Service implements SensorEventListener, Loc
                                 backgroundAccelerometerHandler.post(new Runnable() {
                                     @Override
                                     public void run() {
-                                        saveExcel();
+                                        saveExcel(true);
                                     }
                                 });
                                 System.gc();
@@ -165,6 +162,17 @@ public class gathererService extends Service implements SensorEventListener, Loc
         if (!outputFolder.exists()) {
             outputFolder.mkdir();
         }
+        timer.scheduleAtFixedRate(new TimerTask() {
+            @Override
+            public void run() {
+                backgroundAccelerometerHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        saveExcel(false);
+                    }
+                });
+            }
+        }, SESSION_DURATION, SESSION_DURATION);
         logEvent(NO_LOCATION_EVENT, new Date(), "gathering started");
     }
 
@@ -172,6 +180,15 @@ public class gathererService extends Service implements SensorEventListener, Loc
     sets up the fields
      */
     private void initialize() {
+        t1 = new TextToSpeech(getApplicationContext(), new TextToSpeech.OnInitListener() {
+            @Override
+            public void onInit(int status) {
+                if (status != TextToSpeech.ERROR) {
+                    t1.setLanguage(Locale.ITALY);
+                }
+            }
+        });
+        timer = new Timer();
         if (evaluator == null) {
             evaluator = new dataEvaluator();
         }
@@ -268,10 +285,17 @@ public class gathererService extends Service implements SensorEventListener, Loc
         }
         long time = System.currentTimeMillis();
         double timeDelta = ((double) (time - currentTime)) / 10e2;
-        Log.i("tag", timeDelta + "");
+        try {
+            if (rowNumber > 2)
+                createCell(sheet, rowNumber - 1, TIME_DELTA_COLUMN, timeDelta);
+        } catch (InvocationTargetException e) {
+            e.printStackTrace();
+        } catch (IllegalAccessException e) {
+            e.printStackTrace();
+        }
         currentTime = time;
         queue.add(new Data(event), currentSpeed, currentLatitude, currentLongitude);
-        analyzeData(queue.getData(queue.getLength() - 1), timeDelta);
+        analyzeAndUseData(queue.getData(queue.getLength() - 1), timeDelta);
     }
 
     /*
@@ -279,36 +303,37 @@ public class gathererService extends Service implements SensorEventListener, Loc
     1)if it's risky an alarm will be started, the event will be logged
     3)if it's safe, the sample is printed on the excel
      */
-    private void analyzeData(Data sample, double timeDelta) {
+    private void analyzeAndUseData(Data sample, double timeDelta) {
 
 
         //evaluate the acquired sample
         evaluateResult result = evaluator.evaluate(sample.accelerations[CURRENT_AXIS], sample.speed, timeDelta);
+
 
         //print the values on the excel
         try {
             for (int i = 0; i < 3; i++) {
                 createCell(sheet, rowNumber, i, sample.accelerations[i]);
             }
-            //if we're slowing print the power delta
-            if (result.powerDelta < 0) {
+
+            //print powerDelta
+            if (rowNumber > 2) {
                 createCell(sheet, rowNumber - 1, POWER_COLUMN, result.powerDelta);
             }
 
             //print the speed
             createCell(sheet, rowNumber, SPEED_COLUMN, currentSpeed);
 
-            //if it's different from the old event
-            if (result.safetyValue != oldEventSafety) {
-                if (result.safetyValue == evaluateResult.NOT_SAFE) {
+            //if it's different from the old event and it's not safe
+            if (result.safetyValue != oldEventSafety && result.safetyValue == evaluateResult.NOT_SAFE) {
 
-                    //print timestamp, lat and long
-                    createCell(sheet, rowNumber - 1, LONGITUDE_COLUMN, currentLongitude);
-                    createCell(sheet, rowNumber - 1, LATITUDE_COLUMN, currentLatitude);
-                    createCell(sheet, rowNumber - 1, TIMESTAMP_COLUMN, new Date());
+                //print timestamp, lat and long
+                createCell(sheet, rowNumber - 1, LONGITUDE_COLUMN, currentLongitude);
+                createCell(sheet, rowNumber - 1, LATITUDE_COLUMN, currentLatitude);
+                createCell(sheet, rowNumber - 1, TIMESTAMP_COLUMN, new Date());
 
-                    //log the event
-                    logEvent(queue.getLength() - 1, new Date(), SUDDEN_BRAKE);
+                //log the event
+                logEvent(queue.getLength() - 1, new Date(), (result.powerDelta < 0) ? SUDDEN_BRAKE : SUDDEN_ACCELERATION);
 
                     /*
                     //sound the alarm
@@ -332,16 +357,6 @@ public class gathererService extends Service implements SensorEventListener, Loc
                             }
                         }.start();
                     }*/
-                }
-
-
-
-                /* if it's different from safe, print a record on the excel sheet
-                if (result.safetyValue != evaluateResult.SAFE) {
-                    createCell(sheet, rowNumber, LATITUDE_COLUMN, sample.latitude, wb, null);
-                    createCell(sheet, rowNumber, LONGITUDE_COLUMN, sample.longitude, wb, null);
-                    createCell(sheet, rowNumber, TIMESTAMP_COLUMN, new Date(), wb, null);
-                */
             }
             //update old event value
             oldEventSafety = result.safetyValue;
@@ -374,7 +389,9 @@ public class gathererService extends Service implements SensorEventListener, Loc
             locationManager.removeUpdates(this);
             logEvent(NO_LOCATION_EVENT, new Date(), "gathering stopped");
             isGathering = false;
+            currentTime = 0;
             sendBroadcast();
+            timer.cancel();
         }
     }
 
@@ -387,7 +404,7 @@ public class gathererService extends Service implements SensorEventListener, Loc
     /*
     saves the excel document in the default download directory
      */
-    private void saveExcel() {
+    private void saveExcel(boolean startNewFile) {
         isSaving = true;
         Log.i("tag", "started saving");
 
@@ -396,11 +413,10 @@ public class gathererService extends Service implements SensorEventListener, Loc
         Log.i("tag", "write");
 
         //save the excel
-        String outputFileName = getFileName();
         File outputFile = null;
         try {
             outputFile = new File(outputFolder, "values.xls");
-            FileOutputStream outputStream = new FileOutputStream(outputFile);
+            FileOutputStream outputStream = new FileOutputStream(outputFile, false);
             wb.write(outputStream);
             outputStream.close();
             wb.close();
@@ -411,10 +427,12 @@ public class gathererService extends Service implements SensorEventListener, Loc
         } catch (IOException e) {
             e.printStackTrace();
         }
-        queue = null;
+        if (startNewFile) {
+            queue = null;
+            currentFileName = null;
+        }
         Log.i("tag", "done saving");
         isSaving = false;
-        currentFileName = null;
 
     }
 
@@ -444,25 +462,33 @@ public class gathererService extends Service implements SensorEventListener, Loc
             int j = RecordedIndexes.get(rowIndex);
             Data datas = queue.getData(j);
             currentCell.setCellValue(datas.latitude);
-            //print altitude
+            //print longitude
             currentCell = currentRow.createCell(LONGITUDE_COLUMN);
             currentCell.setCellValue(queue.getData(RecordedIndexes.get(rowIndex)).longitude);
         }
     }
 
     private void closeBackgroundThread() {
-        backgroundAccelerometerThread.quitSafely();
-        try {
-            backgroundAccelerometerThread.join();
-            backgroundAccelerometerThread = null;
-            backgroundAccelerometerHandler = null;
-        } catch (InterruptedException e) {
-            e.printStackTrace();
+        if (!backgroundAccelerometerThread.quitSafely()) {
+            try {
+                backgroundAccelerometerThread.join();
+                backgroundAccelerometerThread = null;
+                backgroundAccelerometerHandler = null;
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
         }
     }
 
     @Override
     public void onDestroy() {
+        backgroundAccelerometerHandler.post(new Runnable() {
+            @Override
+            public void run() {
+                if (isGathering)
+                    saveExcel(true);
+            }
+        });
         closeBackgroundThread();
         stopGathering();
         player.release();

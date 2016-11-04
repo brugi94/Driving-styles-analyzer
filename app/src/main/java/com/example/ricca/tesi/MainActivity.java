@@ -9,6 +9,7 @@ import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.speech.RecognizerIntent;
+import android.speech.tts.TextToSpeech;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.content.ContextCompat;
 import android.support.v4.content.LocalBroadcastManager;
@@ -27,11 +28,20 @@ public class MainActivity extends AppCompatActivity {
     public final static String INTENT_INT_TAG = "INT", INTENT_STRING_TAG = "STRING";
     public final static int EVENT_TOGGLE = 0, EVENT_INDEX = 1;
     private boolean gathering;
+    private TextToSpeech t1;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        t1 = new TextToSpeech(getApplicationContext(), new TextToSpeech.OnInitListener() {
+            @Override
+            public void onInit(int status) {
+                if (status != TextToSpeech.ERROR) {
+                    t1.setLanguage(Locale.ITALY);
+                }
+            }
+        });
 
     }
 
@@ -70,22 +80,78 @@ public class MainActivity extends AppCompatActivity {
                 , new IntentFilter(gathererService.INTENT_TAG));
     }
 
-    public void promptSpeechInput(View view) {
+    public void addFrenata(View view) {
+        startService("Frenata");
+//
+//        if (gathering) {
+//            Intent intent = new Intent(this, gathererService.class);
+//            intent.putExtra(INTENT_INT_TAG, EVENT_INDEX);
+//            startService(intent);
+//            intent = new Intent(this, gathererService.class);
+//            intent.putExtra(INTENT_STRING_TAG, "Frenata");
+//            startService(intent);
+//            t1.speak("velocità ricevuta", TextToSpeech.QUEUE_ADD, null, "velocità request");
+//
+//            /*Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+//            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+//                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+//            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault());
+//            try {
+//                startActivityForResult(intent, REQ_CODE_SPEECH_INPUT);
+//            } catch (ActivityNotFoundException a) {
+//                Toast.makeText(getApplicationContext(),
+//                        "not supported",
+//                        Toast.LENGTH_SHORT).show();
+//            }
+//            intent = new Intent(this, gathererService.class);
+//            intent.putExtra(INTENT_INT_TAG, EVENT_INDEX);
+//            startService(intent);*/
+//        } else {
+//            Toast.makeText(getApplicationContext(), "Start gathering first", Toast.LENGTH_SHORT).show();
+//        }
+    }
+
+    public void addAccelerazione(View view) {
+        startService("Accelerazione");
+//        if (gathering) {
+//            Intent intent = new Intent(this, gathererService.class);
+//            intent.putExtra(INTENT_INT_TAG, EVENT_INDEX);
+//            startService(intent);
+//            intent = new Intent(this, gathererService.class);
+//            intent.putExtra(INTENT_STRING_TAG, "Accelerazione");
+//            startService(intent);
+//            t1.speak("velocità ricevuta", TextToSpeech.QUEUE_ADD, null, "velocità request");
+//
+//            /*Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+//            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+//                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+//            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault());
+//            try {
+//                startActivityForResult(intent, REQ_CODE_SPEECH_INPUT);
+//            } catch (ActivityNotFoundException a) {
+//                Toast.makeText(getApplicationContext(),
+//                        "not supported",
+//                        Toast.LENGTH_SHORT).show();
+//            }
+//            intent = new Intent(this, gathererService.class);
+//            intent.putExtra(INTENT_INT_TAG, EVENT_INDEX);
+//            startService(intent);*/
+//        } else {
+//            Toast.makeText(getApplicationContext(), "Start gathering first", Toast.LENGTH_SHORT).show();
+//        }
+    }
+
+    private void startService(String tag) {
         if (gathering) {
-            Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault());
-            try {
-                startActivityForResult(intent, REQ_CODE_SPEECH_INPUT);
-            } catch (ActivityNotFoundException a) {
-                Toast.makeText(getApplicationContext(),
-                        "not supported",
-                        Toast.LENGTH_SHORT).show();
-            }
-            intent = new Intent(this, gathererService.class);
+            Intent intent = new Intent(this, gathererService.class);
             intent.putExtra(INTENT_INT_TAG, EVENT_INDEX);
             startService(intent);
+            intent = new Intent(this, gathererService.class);
+            intent.putExtra(INTENT_STRING_TAG, tag);
+            startService(intent);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                t1.speak(tag + "aggiunta", TextToSpeech.QUEUE_ADD, null, "velocità request");
+            }
         } else {
             Toast.makeText(getApplicationContext(), "Start gathering first", Toast.LENGTH_SHORT).show();
         }

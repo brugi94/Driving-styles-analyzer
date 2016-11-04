@@ -10,31 +10,47 @@
     tools:context="com.example.ricca.tesi.MainActivity">
 
     <Button
+        android:id="@+id/gatherButton"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Start data gathering"
-        android:id="@+id/gatherButton"
-        android:layout_centerVertical="true"
         android:layout_centerHorizontal="true"
-        android:onClick="toggleGathering"/>
+        android:layout_centerVertical="true"
+        android:onClick="toggleGathering"
+        android:text="Start data gathering" />
 
     <TextView
+        android:id="@+id/speechText"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text=""
-        android:id="@+id/speechText"
         android:layout_alignParentTop="true"
         android:layout_centerHorizontal="true"
-        android:layout_marginTop="39dp" />
+        android:layout_marginTop="39dp"
+        android:text="" />
 
-    <Button
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="Register"
-        android:id="@+id/button"
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_alignParentStart="true"
         android:layout_below="@+id/gatherButton"
-        android:layout_centerHorizontal="true"
-        android:layout_marginTop="82dp"
-        android:onClick="promptSpeechInput"/>
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/button2"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_vertical"
+            android:layout_weight="0.5"
+            android:onClick="addAccelerazione"
+            android:text="Acceleration" />
+
+        <Button
+            android:id="@+id/button"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_vertical"
+            android:layout_weight="1"
+            android:onClick="addFrenata"
+            android:text="Brake" />
+    </LinearLayout>
 
 </RelativeLayout>
