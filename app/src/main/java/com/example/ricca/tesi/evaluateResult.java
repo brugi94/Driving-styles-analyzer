@@ -8,6 +8,9 @@ public class evaluateResult {
     public int safetyValue;
     public double powerDelta;
 
+    public evaluateResult() {
+    }
+
     public evaluateResult(double powerDelta, int safetyValue) {
         this.powerDelta = powerDelta;
         this.safetyValue = safetyValue;

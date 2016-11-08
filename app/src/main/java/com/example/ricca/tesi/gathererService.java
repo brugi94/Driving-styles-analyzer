@@ -586,7 +586,7 @@ public class gathererService extends Service implements SensorEventListener, Loc
     @Override
     public void onLocationChanged(Location location) {
         if (location.hasSpeed()) {
-            if (currentSpeed == 0) {
+            if (isFirst) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && isFirst) {
                     t1.speak("velocità ricevuta", TextToSpeech.QUEUE_ADD, null, "velocità request");
                     isFirst = false;

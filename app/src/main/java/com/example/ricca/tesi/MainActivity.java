@@ -81,7 +81,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     public void addFrenata(View view) {
-        startService("Frenata");
+        startService("brake");
 //
 //        if (gathering) {
 //            Intent intent = new Intent(this, gathererService.class);
@@ -112,7 +112,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     public void addAccelerazione(View view) {
-        startService("Accelerazione");
+        startService("Acceleration");
 //        if (gathering) {
 //            Intent intent = new Intent(this, gathererService.class);
 //            intent.putExtra(INTENT_INT_TAG, EVENT_INDEX);

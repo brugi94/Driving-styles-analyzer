@@ -16,7 +16,7 @@ public class dataEvaluator {
 
     public evaluateResult evaluate(double sample, float speed, double timeDelta) {
         double powerDelta = 0;
-        //if we go from accelerating to decelerating or vice versa update start speed, update values and return safe
+        //if we go from accelerating to decelerating or vice versa update start speed and restart timer
         if (oldSamples[0] * oldSamples[1] < 0) {
             startSpeed = oldSpeed;
             currentCalculatedSpeed = oldSpeed;
@@ -31,7 +31,18 @@ public class dataEvaluator {
         powerDelta = currentEnergyDelta / totalTimeDelta;
 
         updateValues(sample, speed);
+        evaluateResult returnResult = new evaluateResult();
+        returnResult.powerDelta = Double.isInfinite(powerDelta) || Double.isNaN(powerDelta) ? 0 : powerDelta;
         return new evaluateResult(Double.isInfinite(powerDelta) || Double.isNaN(powerDelta) ? 0 : powerDelta, (Math.abs(powerDelta) > NOT_SAFE_THRESHOLD) ? evaluateResult.NOT_SAFE : evaluateResult.SAFE);
+
+    }
+
+    private void updateValues(double sample, float speed) {
+        oldSpeed = speed;
+        oldSamples[0] = oldSamples[1];
+        oldSamples[1] = sample;
+    }
+}
 //        if (oldSample <= 0) {
 //            if (startSpeed == 0 && oldSpeed != 0) {
 //                startSpeed = currentCalculatedSpeed = oldSpeed;
@@ -59,11 +70,3 @@ public class dataEvaluator {
 //        currentCalculatedSpeed = 0;
 //        totalTimeDelta = 0;
 //        return new evaluateResult(0, evaluateResult.SAFE);
-    }
-
-    private void updateValues(double sample, float speed) {
-        oldSpeed = speed;
-        oldSamples[0] = oldSamples[1];
-        oldSamples[1] = sample;
-    }
-}
