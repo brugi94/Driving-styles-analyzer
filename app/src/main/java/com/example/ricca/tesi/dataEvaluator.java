@@ -6,7 +6,7 @@ package com.example.ricca.tesi;
 public class dataEvaluator {
     private float startSpeed, currentCalculatedSpeed;
     private float oldSpeed;
-    private final double NOT_SAFE_THRESHOLD = 80; //brake event's power must be higher than this (which is the power a brake from 50km/h to 30km/h over 1.5 seconds generates)
+    private final double NOT_SAFE_THRESHOLD_ACCEL = 45, NOT_SAFE_THRESHOLD_BRAKE = -50; //brake event's power must be higher than this (which is the power a brake from 50km/h to 30km/h over 1.5 seconds generates)
     private double totalTimeDelta;
     private double[] oldSamples; //index 0 is the oldest
 
@@ -14,6 +14,12 @@ public class dataEvaluator {
         oldSamples = new double[2];
     }
 
+    /**
+     * Method that evaluates a sample
+     * The evaluation is based on (final speed squared - start speed squared)/duration of event
+     * For each call the return value is the value for the sample of the precedent call.
+     * This behaviour is due to the fact that we need the duration of the event and the duration is known only when the next sample is ready
+     */
     public evaluateResult evaluate(double sample, float speed, double timeDelta) {
         double powerDelta = 0;
         //if we go from accelerating to decelerating or vice versa update start speed and restart timer
@@ -33,8 +39,10 @@ public class dataEvaluator {
         updateValues(sample, speed);
         evaluateResult returnResult = new evaluateResult();
         returnResult.powerDelta = Double.isInfinite(powerDelta) || Double.isNaN(powerDelta) ? 0 : powerDelta;
-        return new evaluateResult(Double.isInfinite(powerDelta) || Double.isNaN(powerDelta) ? 0 : powerDelta, (Math.abs(powerDelta) > NOT_SAFE_THRESHOLD) ? evaluateResult.NOT_SAFE : evaluateResult.SAFE);
-
+        if (powerDelta <= NOT_SAFE_THRESHOLD_BRAKE || powerDelta >= NOT_SAFE_THRESHOLD_ACCEL) {
+            returnResult.safetyValue = evaluateResult.NOT_SAFE;
+        }
+        return returnResult;
     }
 
     private void updateValues(double sample, float speed) {

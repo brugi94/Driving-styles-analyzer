@@ -32,8 +32,6 @@ import android.widget.Toast;
 import org.apache.poi.hssf.usermodel.HSSFSheet;
 import org.apache.poi.hssf.usermodel.HSSFWorkbook;
 import org.apache.poi.ss.usermodel.Cell;
-import org.apache.poi.ss.usermodel.CellStyle;
-import org.apache.poi.ss.usermodel.CreationHelper;
 import org.apache.poi.ss.usermodel.Row;
 
 import java.io.File;
@@ -41,7 +39,7 @@ import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.FileWriter;
 import java.io.IOException;
-import java.lang.reflect.InvocationTargetException;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Date;
@@ -55,38 +53,45 @@ import java.util.TimerTask;
 public class gathererService extends Service implements SensorEventListener, LocationListener {
     LocalBroadcastManager broadcaster;
     private SensorManager manager;
-    private Sensor accelerometer;
-    private DataQueue queue;
+    private Sensor accelerometerNoGrav, accelerometerWithGrav;
+    private DataQueue noGravQueue, gravQueue;
     private Handler backgroundAccelerometerHandler;
-    public final int TIME_DELTA_COLUMN = 5, SAMPLE_RATE = (int) 10E3, EXPLANATION_COLUMN = 9, POWER_COLUMN = 4, LATITUDE_COLUMN = 8, LONGITUDE_COLUMN = 9, EVENT_TYPE_COLUMN = 6, TIMESTAMP_COLUMN = 7, NO_LOCATION_EVENT = -1, SPEED_COLUMN = 3, CURRENT_AXIS = 1;
+    public int GRAV_SPEED_COLUMN, GRAV_TIMESTAMP_COLUMN, NO_GRAV_TIMESTAMP_COLUMN, HUNDREDTH_OF_SECOND = (int) 10E3, EXPLANATION_COLUMN, CALCULATED_SPEED_COLUMN, LATITUDE_COLUMN, LONGITUDE_COLUMN, POWER_COLUMN, NO_LOCATION_EVENT = -1, NO_GRAV_SPEED_COLUMN, CURRENT_AXIS = 1;
     private HandlerThread backgroundAccelerometerThread;
-    private boolean isGathering, isSaving, isFirst;
+    private boolean isGathering, isSaving, speedReceived, isGravityEstimated, eventFound;
     public final static String INTENT_TAG = "tag", INTENT_MSG = "msg";
-    private int rowNumber = 2, oldEventSafety;
-    private final String SUDDEN_BRAKE = "Sudden brake", SUDDEN_ACCELERATION = "Sudden acceleration";
-    private final String[] DATA_FIELD_NAMES = {"FILTERED DATA"}, SECOND_ROW_STRINGS = {"x-axis", "y-axis", "z-axis", "speed", "power delta", "time delta in seconds", "event type", "timestamp", "latitude", "longitude"};
+    private int noGravRowNumber = 2, gravRowNumber = 2;
+    private final String[] DATA_FIELD_NAMES = {"FILTERED DATA"}, SECOND_ROW_STRINGS = {"x-axis", "y-axis", "z-axis", "timestamp", "speed", "x-axis", "y-axis", "z-axis", "timestamp", " GPS speed", "calculated speed", "powerDelta", "latitude", "longitude"};
     private ArrayList<Integer> RecordedIndexes;
     private ArrayList<String> RecordedEvents;
-    private ArrayList<Date> recordedTimeStamps;
     private LocationManager locationManager;
-    private float currentSpeed;
+    private float currentSpeed, calculatedSpeed, oldCalculatedSpeed;
     private double currentLatitude, currentLongitude;
     private dataEvaluator evaluator;
-    private CellStyle dateFormat;
     private HSSFWorkbook wb;
     private HSSFSheet sheet;
     private MediaPlayer player;
     private String currentFileName;
     private File outputFolder;
     private TextToSpeech t1;
-    private long currentTime;
+    private long currentGravTime;
     private Timer timer;
     private final int SESSION_DURATION = 600000;
+    private long lastGPSSpeedTime;
+    private double[] gravity;
 
     @Override
     public void onCreate() {
         super.onCreate();
-
+        NO_GRAV_TIMESTAMP_COLUMN = 3;
+        NO_GRAV_SPEED_COLUMN = NO_GRAV_TIMESTAMP_COLUMN + 1;
+        GRAV_TIMESTAMP_COLUMN = NO_GRAV_SPEED_COLUMN + 4;
+        GRAV_SPEED_COLUMN = GRAV_TIMESTAMP_COLUMN + 1;
+        CALCULATED_SPEED_COLUMN = GRAV_SPEED_COLUMN + 1;
+        POWER_COLUMN = CALCULATED_SPEED_COLUMN + 1;
+        LATITUDE_COLUMN = POWER_COLUMN + 1;
+        LONGITUDE_COLUMN = LATITUDE_COLUMN + 1;
+        EXPLANATION_COLUMN = LONGITUDE_COLUMN + 1;
     }
 
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -116,8 +121,7 @@ public class gathererService extends Service implements SensorEventListener, Loc
 
                     case MainActivity.EVENT_INDEX: {
                         if (isGathering) {
-                            RecordedIndexes.add(queue.getLength());
-                            recordedTimeStamps.add(new Date());
+                            RecordedIndexes.add(noGravQueue.getLength());
                             break;
                         }
                     }
@@ -135,45 +139,35 @@ public class gathererService extends Service implements SensorEventListener, Loc
         return START_STICKY;
     }
 
-    /*
-    registers the listeners and logs the gathering start event
+    /**
+     * Initializes needed variables, registers listeners for GPS and accelerometer
+     * Also creates the output folder, the timer for saving excel and logs the start event
      */
     private void startGathering() {
         initialize();
-        manager.registerListener(this, accelerometer, 5 * SAMPLE_RATE, backgroundAccelerometerHandler);
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED && ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-            // TODO: Consider calling
-            //    ActivityCompat#requestPermissions
-            // here to request the missing permissions, and then overriding
-            //   public void onRequestPermissionsResult(int requestCode, String[] permissions,
-            //                                          int[] grantResults)
-            // to handle the case where the user grants the permission. See the documentation
-            // for ActivityCompat#requestPermissions for more details.
+        /*register accelerometer listener arguments:
+        1) desired listener
+        2) desired sensor
+        3) rate at which the events are delivered in microseconds
+        4) handler where the callback is executed
+        */
+        manager.registerListener(this, accelerometerNoGrav, 5 * HUNDREDTH_OF_SECOND, backgroundAccelerometerHandler);
+        manager.registerListener(this, accelerometerWithGrav, HUNDREDTH_OF_SECOND, backgroundAccelerometerHandler);
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
+                && ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             Toast.makeText(this, "no permissions", Toast.LENGTH_SHORT).show();
             return;
         }
 
-
+        /*register GPS listener arguments:
+            1) which type of GPS
+            2) minimum interval between samples
+            3) minimum distance between samples
+            4) which listener to register
+        */
         locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 0, 0, this);
         isGathering = true;
         sendBroadcast();
-        //create the output folder
-        outputFolder = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), getFileName());
-        if (!outputFolder.exists()) {
-            outputFolder.mkdir();
-        }
-        timer.scheduleAtFixedRate(new TimerTask() {
-            @Override
-            public void run() {
-                backgroundAccelerometerHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        saveExcel(false);
-                    }
-                });
-            }
-        }, SESSION_DURATION, SESSION_DURATION);
-        logEvent(NO_LOCATION_EVENT, new Date(), "gathering started");
     }
 
     /*
@@ -192,7 +186,6 @@ public class gathererService extends Service implements SensorEventListener, Loc
         if (evaluator == null) {
             evaluator = new dataEvaluator();
         }
-
         try {
             Uri notification = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
             player = new MediaPlayer();
@@ -203,15 +196,36 @@ public class gathererService extends Service implements SensorEventListener, Loc
         } catch (Exception e) {
             e.printStackTrace();
         }
-        queue = new DataQueue(DataQueue.BUTTERWORTH, 0.1);
-        recordedTimeStamps = new ArrayList<Date>();
+        gravity = new double[3];
+        noGravQueue = new DataQueue(DataQueue.BUTTERWORTH, 0.1);
+        gravQueue = new DataQueue(DataQueue.BUTTERWORTH, 0.1);
         RecordedIndexes = new ArrayList<Integer>();
         RecordedEvents = new ArrayList<String>();
         broadcaster = LocalBroadcastManager.getInstance(this);
-        rowNumber = 2;
-        isFirst = true;
+        noGravRowNumber = 2;
+        gravRowNumber = 2;
+        speedReceived = false;
+        currentSpeed = 0;
+        currentGravTime = 0;
+        eventFound = false;
+        //create the output folder
+        outputFolder = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), getFileName());
+        if (!outputFolder.exists()) {
+            outputFolder.mkdir();
+        }
+        timer.scheduleAtFixedRate(new TimerTask() {
+            @Override
+            public void run() {
+                backgroundAccelerometerHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        saveExcel(false);
+                    }
+                });
+            }
+        }, SESSION_DURATION, SESSION_DURATION);
+        logEvent(NO_LOCATION_EVENT, new Date(), "gathering started");
         setupExcel();
-
         retrieveSensor();
         openBackgroundThread();
     }
@@ -225,19 +239,13 @@ public class gathererService extends Service implements SensorEventListener, Loc
         wb = new HSSFWorkbook();
         sheet = wb.createSheet("sheet1");
 
-        //setup dateFormat style
-        CreationHelper createHelper = wb.getCreationHelper();
-        dateFormat = wb.createCellStyle();
-        dateFormat.setDataFormat(createHelper.createDataFormat().getFormat("m/d/yy h:mm"));
+//        //setup dateFormat style
+//        dateFormat = wb.createCellStyle();
+//        HSSFDataFormat df = wb.createDataFormat();
+//        dateFormat.setDataFormat(df.getFormat("[h]:mm:ss.000;@"));
 
-        //print names for the datas
-        Row currentRow = sheet.createRow(0);
-        for (int i = 0; i < DATA_FIELD_NAMES.length; i++) {
-            Cell currentCell = currentRow.createCell((3 * i) + 1);
-            currentCell.setCellValue(DATA_FIELD_NAMES[i]);
-        }
         //print the strings on the second row
-        currentRow = sheet.createRow(1);
+        Row currentRow = sheet.createRow(1);
         for (int i = 0; i < SECOND_ROW_STRINGS.length; i++) {
             Cell currentCell = currentRow.createCell(i);
             currentCell.setCellValue(SECOND_ROW_STRINGS[i]);
@@ -260,7 +268,11 @@ public class gathererService extends Service implements SensorEventListener, Loc
         }
         if (manager == null) {
             manager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
-            if ((accelerometer = manager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)) == null) {
+            if ((accelerometerNoGrav = manager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)) == null) {
+                Toast.makeText(getApplicationContext(), "linear acceleration not supported", Toast.LENGTH_SHORT).show();
+                stopSelf();
+            }
+            if ((accelerometerWithGrav = manager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)) == null) {
                 Toast.makeText(getApplicationContext(), "linear acceleration not supported", Toast.LENGTH_SHORT).show();
                 stopSelf();
             }
@@ -280,22 +292,36 @@ public class gathererService extends Service implements SensorEventListener, Loc
      */
     @Override
     public void onSensorChanged(SensorEvent event) {
-        if (currentTime == 0) {
-            currentTime = System.currentTimeMillis();
+        if (event.sensor.getType() == Sensor.TYPE_LINEAR_ACCELERATION) {
+            noGravQueue.add(new Data(event), currentSpeed, currentLatitude, currentLongitude);
+            if (speedReceived) {
+                writeNoGravData(noGravQueue.getData(noGravQueue.getLength() - 1));
+            }
         }
-        long time = System.currentTimeMillis();
-        double timeDelta = ((double) (time - currentTime)) / 10e2;
-        try {
-            if (rowNumber > 2)
-                createCell(sheet, rowNumber - 1, TIME_DELTA_COLUMN, timeDelta);
-        } catch (InvocationTargetException e) {
-            e.printStackTrace();
-        } catch (IllegalAccessException e) {
-            e.printStackTrace();
+        if (event.sensor.getType() == Sensor.TYPE_ACCELEROMETER) {
+            if (currentGravTime == 0) {
+                currentGravTime = System.currentTimeMillis();
+            }
+            long time = System.currentTimeMillis();
+            double timeDelta = ((double) (time - currentGravTime)) / 1000;
+            if (!speedReceived && !isGravityEstimated) {
+                for (int i = 0; i < 3; i++) {
+                    gravity[i] = event.values[i] * 0.1 + gravity[i] * 0.9;
+                }
+            }
+            if (timeDelta >= 0.04) {
+                if (speedReceived) {
+                    for (int i = 0; i < 3; i++) {
+                        event.values[i] -= gravity[i];
+                    }
+                    gravQueue.add(new Data(event), currentSpeed, currentLatitude, currentLongitude);
+                    //print timestamp
+                    createCell(sheet, gravRowNumber, GRAV_TIMESTAMP_COLUMN, new Date());
+                    analyzeAndUseGravData(gravQueue.getData(gravQueue.getLength() - 1), timeDelta);
+                }
+                currentGravTime = System.currentTimeMillis();
+            }
         }
-        currentTime = time;
-        queue.add(new Data(event), currentSpeed, currentLatitude, currentLongitude);
-        analyzeAndUseData(queue.getData(queue.getLength() - 1), timeDelta);
     }
 
     /*
@@ -303,93 +329,79 @@ public class gathererService extends Service implements SensorEventListener, Loc
     1)if it's risky an alarm will be started, the event will be logged
     3)if it's safe, the sample is printed on the excel
      */
-    private void analyzeAndUseData(Data sample, double timeDelta) {
+    private void writeNoGravData(Data sample) {
+        //write timestamp
+        if (noGravRowNumber > 1) {
+            createCell(sheet, noGravRowNumber, NO_GRAV_TIMESTAMP_COLUMN, new Date());
+        }
+        //print values
+        for (int i = 0; i < 3; i++) {
+            createCell(sheet, noGravRowNumber, i, sample.accelerations[i]);
+        }
+        //print speed
+        createCell(sheet, noGravRowNumber, NO_GRAV_SPEED_COLUMN, currentSpeed);
+        noGravRowNumber++;
+    }
 
 
-        //evaluate the acquired sample
-        evaluateResult result = evaluator.evaluate(sample.accelerations[CURRENT_AXIS], sample.speed, timeDelta);
-
-
-        //print the values on the excel
-        try {
-            for (int i = 0; i < 3; i++) {
-                createCell(sheet, rowNumber, i, sample.accelerations[i]);
-            }
-
-            //print powerDelta
-            if (rowNumber > 2) {
-                createCell(sheet, rowNumber - 1, POWER_COLUMN, result.powerDelta);
-            }
-
-            //print the speed
-            createCell(sheet, rowNumber, SPEED_COLUMN, currentSpeed);
-
-            //if it's different from the old event and it's not safe
-            if (result.safetyValue != oldEventSafety && result.safetyValue == evaluateResult.NOT_SAFE) {
-
-                //print timestamp, lat and long
-                createCell(sheet, rowNumber - 1, LONGITUDE_COLUMN, currentLongitude);
-                createCell(sheet, rowNumber - 1, LATITUDE_COLUMN, currentLatitude);
-                createCell(sheet, rowNumber - 1, TIMESTAMP_COLUMN, new Date());
-
-                //log the event
-                logEvent(queue.getLength() - 1, new Date(), (result.powerDelta < 0) ? SUDDEN_BRAKE : SUDDEN_ACCELERATION);
-
-                    /*
-                    //sound the alarm
-                    if (!player.isPlaying()) {
-                        player.start();
-                        //stop it after 10 seconds
-                        new CountDownTimer(6000, 6000) {
-                            @Override
-                            public void onTick(long millisUntilFinished) {
-
-                            }
-
-                            @Override
-                            public void onFinish() {
-                                player.stop();
-                                try {
-                                    player.prepare();
-                                } catch (IOException e) {
-                                    e.printStackTrace();
-                                }
-                            }
-                        }.start();
-                    }*/
-            }
-            //update old event value
-            oldEventSafety = result.safetyValue;
-            rowNumber++;
-
-        } catch (InvocationTargetException e) {
-            e.printStackTrace();
-        } catch (IllegalAccessException e) {
-            e.printStackTrace();
+    private void analyzeAndUseGravData(Data sample, double timeDelta) {
+        //print values
+        for (int i = 0; i < 3; i++) {
+            createCell(sheet, gravRowNumber, NO_GRAV_SPEED_COLUMN + 1 + i, sample.accelerations[i]);
         }
 
+        //print  GPS speed
+        createCell(sheet, gravRowNumber, GRAV_SPEED_COLUMN, sample.speed);
+
+        //update calculated speed
+        createCell(sheet, gravRowNumber, CALCULATED_SPEED_COLUMN, calculatedSpeed);
+        calculatedSpeed += sample.accelerations[CURRENT_AXIS] * timeDelta;
+        calculatedSpeed = (calculatedSpeed < 0) ? 0 : calculatedSpeed;
+//            //evaluate the acquired sample
+//            evaluateResult result = evaluator.evaluate(sample.accelerations[CURRENT_AXIS], sample.speed, timeDelta);
+//            //if it's a different event, it's not logged
+//            if (result.powerDelta * oldPowerDelta < 0) {
+//                isEventLogged = false;
+//            }
+//            //if it's dangerous and not logged
+//            if (result.safetyValue == evaluateResult.NOT_SAFE && !isEventLogged) {
+//                isEventLogged = true;
+//
+//                createCell(sheet, gravRowNumber - 1, LONGITUDE_COLUMN, currentLongitude);
+//                createCell(sheet, gravRowNumber - 1, LATITUDE_COLUMN, currentLatitude);
+//
+//                //log the event
+//                logEvent(noGravQueue.getLength() - 1, new Date(), (result.powerDelta < 0) ? SUDDEN_BRAKE : SUDDEN_ACCELERATION);
+//                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+//                    t1.speak((result.powerDelta < 0) ? "Frenata brusca" : "Accelerazione brusca", TextToSpeech.QUEUE_ADD, null, "velocità request");
+//                }
+//            }
+//
+//            //print powerDelta
+//            if (gravRowNumber > 2) {
+//                createCell(sheet, gravRowNumber - 1, CALCULATED_SPEED_COLUMN, result.powerDelta);
+//            }
+//            //update old event value
+//            oldPowerDelta = result.safetyValue;
+        gravRowNumber++;
     }
+
 
     /*
     stops receiving updates and logs the event "gathering stopped"
      */
+
     private void stopGathering() {
         if (isGathering) {
             manager.unregisterListener(this);
+
             if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED && ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-                // TODO: Consider calling
-                //    ActivityCompat#requestPermissions
-                // here to request the missing permissions, and then overriding
-                //   public void onRequestPermissionsResult(int requestCode, String[] permissions,
-                //                                          int[] grantResults)
-                // to handle the case where the user grants the permission. See the documentation
-                // for ActivityCompat#requestPermissions for more details.
                 return;
             }
             locationManager.removeUpdates(this);
             logEvent(NO_LOCATION_EVENT, new Date(), "gathering stopped");
             isGathering = false;
-            currentTime = 0;
+            isGravityEstimated = true;
             sendBroadcast();
             timer.cancel();
         }
@@ -428,7 +440,7 @@ public class gathererService extends Service implements SensorEventListener, Loc
             e.printStackTrace();
         }
         if (startNewFile) {
-            queue = null;
+            noGravQueue = null;
             currentFileName = null;
         }
         Log.i("tag", "done saving");
@@ -441,8 +453,7 @@ public class gathererService extends Service implements SensorEventListener, Loc
      */
     private void printEvents() {
         //find length of events array
-        int minLength = Math.min(RecordedIndexes.size(), recordedTimeStamps.size());
-        minLength = Math.min(minLength, RecordedEvents.size());
+        int minLength = Math.min(RecordedIndexes.size(), RecordedEvents.size());
         //for each event registered
         for (int rowIndex = 0; rowIndex < minLength; rowIndex++) {
             //find the row with its index
@@ -450,21 +461,18 @@ public class gathererService extends Service implements SensorEventListener, Loc
             if (currentRow == null) {
                 currentRow = this.sheet.createRow(RecordedIndexes.get(rowIndex) + 2);
             }
-            Cell currentCell = currentRow.createCell(EVENT_TYPE_COLUMN);
+            Cell currentCell = currentRow.createCell(POWER_COLUMN);
             //print type of event
             currentCell.setCellValue(RecordedEvents.get(rowIndex));
-            //print dateFormat
-            currentCell = currentRow.createCell(TIMESTAMP_COLUMN);
-            currentCell.setCellValue(recordedTimeStamps.get(rowIndex));
-            currentCell.setCellStyle(dateFormat);
+
             //print latitude
             currentCell = currentRow.createCell(LATITUDE_COLUMN);
             int j = RecordedIndexes.get(rowIndex);
-            Data datas = queue.getData(j);
+            Data datas = noGravQueue.getData(j);
             currentCell.setCellValue(datas.latitude);
             //print longitude
             currentCell = currentRow.createCell(LONGITUDE_COLUMN);
-            currentCell.setCellValue(queue.getData(RecordedIndexes.get(rowIndex)).longitude);
+            currentCell.setCellValue(noGravQueue.getData(RecordedIndexes.get(rowIndex)).longitude);
         }
     }
 
@@ -497,7 +505,7 @@ public class gathererService extends Service implements SensorEventListener, Loc
     /*
     inserts a value in the selected cell
      */
-    private <T> void createCell(HSSFSheet sheet, int rowNumber, int columnNumber, T value) throws InvocationTargetException, IllegalAccessException {
+    private <T> void createCell(HSSFSheet sheet, int rowNumber, int columnNumber, T value) {
         Row currentRow = null;
         if (sheet.getRow(rowNumber) == null) {
             currentRow = sheet.createRow(rowNumber);
@@ -510,37 +518,10 @@ public class gathererService extends Service implements SensorEventListener, Loc
         }
         if (value instanceof Double) {
             currentCell.setCellValue((Double) value);
-            //color the cell according to safetyvalue
-            /*if (columnNumber == CURRENT_AXIS) {
-                switch (result) {
-                    case evaluateResult.NOT_SAFE: {
-                        CellStyle redFormat = wb.createCellStyle();
-                        redFormat.setFillForegroundColor(IndexedColors.RED.index);
-                        redFormat.setFillPattern(HSSFCellStyle.SOLID_FOREGROUND);
-
-                        currentRow = sheet.getRow(rowNumber);
-                        currentCell = currentRow.getCell(columnNumber);
-                        currentCell.setCellStyle(redFormat);
-                        Log.i("tag", "colored row " + (rowNumber));
-
-                        break;
-                    }
-                    case evaluateResult.NOT_SAFE_LOW_SPEED: {
-                        CellStyle orangeFormat = wb.createCellStyle();
-                        orangeFormat.setFillForegroundColor(IndexedColors.ORANGE.index);
-                        orangeFormat.setFillPattern(HSSFCellStyle.SOLID_FOREGROUND);
-                        currentRow = (Row) method.invoke(sheet, rowNumber);
-                        currentCell = currentRow.getCell(columnNumber);
-                        currentCell.setCellStyle(orangeFormat);
-
-                        break;
-                    }
-                }
-            }*/
         }
         if (value instanceof Date) {
-            currentCell.setCellValue((Date) value);
-            currentCell.setCellStyle(dateFormat);
+            SimpleDateFormat sdf = new SimpleDateFormat("HH:mm:ss.SSS");
+            currentCell.setCellValue(sdf.format(value));
         }
         if (value instanceof Float) {
             currentCell.setCellValue((Float) value);
@@ -586,13 +567,48 @@ public class gathererService extends Service implements SensorEventListener, Loc
     @Override
     public void onLocationChanged(Location location) {
         if (location.hasSpeed()) {
-            if (isFirst) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && isFirst) {
+
+            if (!speedReceived) {
+                //say that we received speed
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && !speedReceived) {
                     t1.speak("velocità ricevuta", TextToSpeech.QUEUE_ADD, null, "velocità request");
-                    isFirst = false;
+                    speedReceived = true;
                 }
+                //update speed
+                currentSpeed = location.getSpeed();
+                calculatedSpeed = currentSpeed;
+                oldCalculatedSpeed = currentSpeed;
+                lastGPSSpeedTime = System.currentTimeMillis();
+            } else {
+                //calculate time delta
+                long timeDelta = System.currentTimeMillis() - lastGPSSpeedTime;
+                lastGPSSpeedTime = System.currentTimeMillis();
+
+                //calculate new speed
+                float newSpeed = (float) (calculatedSpeed * 0.5 + location.getSpeed() * 0.5);
+
+                //calculate power
+                double power = (Math.pow(newSpeed, 2) - Math.pow(oldCalculatedSpeed, 2)) / timeDelta * 1000;
+                createCell(sheet, gravRowNumber, POWER_COLUMN, power);
+                if ((power > 60 || power <= -70) && !eventFound) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                        t1.speak((power > 0) ? "accelerazione" : "frenata", TextToSpeech.QUEUE_ADD, null, "velocità request");
+                    }
+                    eventFound = true;
+                    new Timer().schedule(new TimerTask() {
+
+                        @Override
+                        public void run() {
+                            eventFound = false;
+                        }
+                    }, 5000);
+                }
+
+                //update speed values
+                currentSpeed = location.getSpeed();
+                oldCalculatedSpeed = newSpeed;
+                calculatedSpeed = newSpeed;
             }
-            currentSpeed = location.getSpeed();
         }
         if (location.getLatitude() != 0 && location.getLongitude() != 0) {
             currentLatitude = location.getLatitude();
@@ -618,6 +634,7 @@ public class gathererService extends Service implements SensorEventListener, Loc
     /*
     prints an event on the log file
      */
+
     private void logEvent(int index, Date currentDate, String eventDescription) {
         try {
             File outputFile = new File(outputFolder, "log.txt");
@@ -635,7 +652,7 @@ public class gathererService extends Service implements SensorEventListener, Loc
 
             //if there's a location, append it
             if (index != NO_LOCATION_EVENT) {
-                writer.append(" lat: " + queue.getData(index).latitude + " long: " + queue.getData(index).longitude);
+                writer.append(" lat: " + noGravQueue.getData(index).latitude + " long: " + noGravQueue.getData(index).longitude);
             }
             writer.append("\n");
             writer.flush();

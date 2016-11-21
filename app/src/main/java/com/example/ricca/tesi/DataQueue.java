@@ -10,17 +10,17 @@ public class DataQueue {
     private Data[] filteredDatas, nonFilteredDatas;
     private int length;
     private double[] butterworthCoefficients;
-    private double lowPassCoefficient;
+    private double lowPassCoefficient, highPassCoefficient;
     private int type;
-    private long currentTime;
-    private final static double THRESHOLD = 3.0f;
+    private double[] gravity;
 
     public DataQueue() {
         filteredDatas = new Data[10];
         nonFilteredDatas = new Data[10];
         length = 0;
     }
-    public int getLength(){
+
+    public int getLength() {
         return length;
     }
 
@@ -47,6 +47,8 @@ public class DataQueue {
             }
             case LOWPASS: {
                 lowPassCoefficient = parameter;
+                gravity = new double[3];
+                highPassCoefficient = 0.1;
                 break;
             }
         }
@@ -70,19 +72,21 @@ public class DataQueue {
         //filter the data
         for (int axes = 0; axes < 3; axes++) {
 
-            //LOW-PASS or BUTTERWORTH
+            //RECURSIVE or BUTTERWORTH
             switch (type) {
                 case LOWPASS: {
                     if (length != 0) {
-                        sample.accelerations[axes] = (filteredDatas[length - 1].accelerations[axes] * lowPassCoefficient) + (1 - lowPassCoefficient) * sample.accelerations[axes];
+                        gravity[axes] = (1 - highPassCoefficient) * gravity[axes] + sample.accelerations[axes] * highPassCoefficient;
+                        sample.accelerations[axes] = (lowPassCoefficient * filteredDatas[length - 1].accelerations[axes]) + (1 - lowPassCoefficient) * sample.accelerations[axes];
+                        sample.accelerations[axes] -= gravity[axes];
                     }
                     break;
                 }
                 case BUTTERWORTH: {
                     if (length >= 2) {
                         sample.accelerations[axes] *= butterworthCoefficients[0];
-                        sample.accelerations[axes] += butterworthCoefficients[1] * nonFilteredDatas[length-1].accelerations[axes]; //swap nonFilteredDatas with highFilteredDatas[first]
-                        sample.accelerations[axes] += butterworthCoefficients[0] * nonFilteredDatas[length-2].accelerations[axes]; //swap nonFilteredDatas with highFilteredDatas[second]
+                        sample.accelerations[axes] += butterworthCoefficients[1] * nonFilteredDatas[length - 1].accelerations[axes]; //swap nonFilteredDatas with highFilteredDatas[first]
+                        sample.accelerations[axes] += butterworthCoefficients[0] * nonFilteredDatas[length - 2].accelerations[axes]; //swap nonFilteredDatas with highFilteredDatas[second]
                         sample.accelerations[axes] += butterworthCoefficients[2] * filteredDatas[length - 1].accelerations[axes];
                         sample.accelerations[axes] += butterworthCoefficients[3] * filteredDatas[length - 2].accelerations[axes];
                     }
@@ -97,13 +101,13 @@ public class DataQueue {
     private void resize(int array) {
         switch (array) {
             case FILTERED: {
-                Data[] newDatas = new Data[(int)(filteredDatas.length * 1.1)];
+                Data[] newDatas = new Data[(int) (filteredDatas.length * 1.1)];
                 System.arraycopy(filteredDatas, 0, newDatas, 0, length);
                 filteredDatas = newDatas;
                 break;
             }
             case NONFILTERED: {
-                Data[] newDatas = new Data[(int)(nonFilteredDatas.length * 1.1)];
+                Data[] newDatas = new Data[(int) (nonFilteredDatas.length * 1.1)];
                 System.arraycopy(nonFilteredDatas, 0, newDatas, 0, length);
                 nonFilteredDatas = newDatas;
                 break;
@@ -141,15 +145,15 @@ public class DataQueue {
         }
     }
 
-    public float[] getSpeed(){
+    public float[] getSpeed() {
         float[] speeds = new float[length];
-        for(int i=0;i<length;i++){
+        for (int i = 0; i < length; i++) {
             speeds[i] = filteredDatas[i].speed;
         }
         return speeds;
     }
 
-    public Data getData(int index){
+    public Data getData(int index) {
         return filteredDatas[index];
     }
 }
